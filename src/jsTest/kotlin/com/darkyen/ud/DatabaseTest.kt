@@ -1,6 +1,5 @@
 package com.darkyen.ud
 
-import com.darkyen.ucbor.CborSerializers
 import io.kotest.core.spec.style.FunSpec
 
 class DatabaseBirdTest : FunSpec({

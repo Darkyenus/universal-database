@@ -1,6 +1,6 @@
 plugins {
-    kotlin("multiplatform")
-    id("com.android.library")
+    kotlin("multiplatform") version "1.7.22"
+    //id("com.android.library") version "7.3.0"
     id("io.kotest.multiplatform") version "5.5.5"
 }
 
@@ -14,11 +14,9 @@ repositories {
 }
 
 kotlin {
-    android {}
+    //android {}
     js(IR) {
         browser {
-            webpackTask {
-            }
             testTask {
                 useKarma {
                     useFirefoxDeveloperHeadless()
@@ -41,7 +39,7 @@ kotlin {
                 api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
 
                 // CBOR
-                api("com.darkyen.ultralight-cbor:ultralight-cbor:2b0aa48fcc")
+                api("com.darkyen.ultralight-cbor:ultralight-cbor:0.2")
             }
         }
         val commonTest by getting {
@@ -52,12 +50,12 @@ kotlin {
                 implementation("io.kotest:kotest-property:$kotest")
             }
         }
-        val androidMain by getting {
-            dependencies {
-                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
-            }
-        }
-        val androidInstrumentedTest by getting
+        //val androidMain by getting {
+        //    dependencies {
+        //        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
+        //    }
+        //}
+        //val androidTest by getting
         val jsMain by getting {
             dependencies {
                 // IndexedDB external declarations
@@ -73,12 +71,7 @@ kotlin {
     }
 }
 
-tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
-    kotlinOptions {
-        apiVersion = "1.8"
-    }
-}
-
+/*
 android {
     namespace = "com.darkyen.ud"
     compileSdk = 33
@@ -86,3 +79,4 @@ android {
         minSdk = 16
     }
 }
+*/

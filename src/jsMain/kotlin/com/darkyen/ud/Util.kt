@@ -1,6 +1,5 @@
 package com.darkyen.ud
 
-import com.darkyen.ucbor.deserializeBytes
 import kotlinx.browser.window
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.khronos.webgl.ArrayBuffer

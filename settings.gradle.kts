@@ -1,6 +1,7 @@
 
 rootProject.name = "universal-database"
 
+/*
 pluginManagement {
     repositories {
         mavenCentral()
@@ -14,4 +15,4 @@ pluginManagement {
             }
         }
     }
-}
+}*/

@@ -28,7 +28,7 @@ enum class ConservationStatus {
         val KEY_SERIALIZER = EnumKeySerializer(values())
     }
 }
-class Bird(val birdlifeId:Long, val name: String, val conservationStatus:ConservationStatus, val wingspanM:Float, val massKG:Float)
+class Bird(val birdlifeId:Long, val name: String, val conservationStatus: ConservationStatus, val wingspanM:Float, val massKG:Float)
 
 val BIRD_SERIALIZER = object : CborSerializer<Bird> {
     override fun CborReadSingle.deserialize(): Bird {
