@@ -111,7 +111,7 @@ class DatabaseMigrationTest : FunSpec({
     }
 })
 
-private suspend inline fun <T> withDatabase(config: BackendDatabaseConfig, block: (Database) -> T):T {
+suspend inline fun <T> withDatabase(config: BackendDatabaseConfig, block: (Database) -> T):T {
     val result = openUniversalDatabase(config)
     result.shouldBeInstanceOf<OpenDBResult.Success>()
     val db = result.db

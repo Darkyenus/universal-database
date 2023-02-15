@@ -5,18 +5,14 @@ import com.darkyen.ucbor.toHexString
 import io.kotest.assertions.withClue
 import io.kotest.common.ExperimentalKotest
 import io.kotest.core.spec.style.FunSpec
-import io.kotest.datatest.withData
 import io.kotest.matchers.shouldBe
 import io.kotest.property.Arb
 import io.kotest.property.PropTestConfig
 import io.kotest.property.arbitrary.*
-import io.kotest.property.checkAll
 import io.kotest.property.internal.proptest
-import io.kotest.property.resolution.GlobalArbResolver
 import io.kotest.property.resolution.default
 import kotlin.math.min
 import kotlin.math.sign
-import kotlin.reflect.typeOf
 
 class DatabaseKeyTest : FunSpec({
     test("IntKeySerializer") {
@@ -108,7 +104,7 @@ class DatabaseKeyTest : FunSpec({
 })
 
 @OptIn(ExperimentalKotest::class)
-suspend inline fun <reified T:Comparable<T>> check(serializer: KeySerializer<T>, arb:Arb<T> = Arb.default<T>(), orderingArb:Arb<T> = arb, crossinline compare: (T, T) -> Int = { a, b -> a.compareTo(b).sign }) {
+suspend inline fun <reified T:Comparable<T>> check(serializer: KeySerializer<T>, arb: Arb<T> = Arb.default<T>(), crossinline compare: (T, T) -> Int = { a, b -> a.compareTo(b).sign }) {
     val data = ByteData()
     withClue("roundtrip") {
         proptest(

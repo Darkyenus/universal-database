@@ -4,7 +4,6 @@ import com.darkyen.ucbor.ByteData
 import com.darkyen.ucbor.CborRead
 import com.darkyen.ucbor.CborSerializer
 import com.darkyen.ucbor.CborWrite
-import com.juul.indexeddb.*
 import com.juul.indexeddb.external.*
 import kotlinx.browser.window
 import kotlinx.coroutines.*
@@ -19,22 +18,45 @@ internal class IndexedDBUniversalDatabase(
 
     internal var closed = false
 
+    @Suppress("REDUNDANT_INLINE_SUSPEND_FUNCTION_TYPE")
+    private suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transaction: T, block: suspend T.() -> R): Result<R> {
+        val result = try {
+            Result.success(transaction.block())
+        } catch (e: dynamic) {
+            Result.failure(e.unsafeCast<Throwable>())
+        }
+
+        val trans = transaction.transaction
+        if (result.isSuccess) {
+            if (trans.asDynamic().commit.unsafeCast<Boolean>()) {
+                trans.commit()
+            }
+        } else {
+            trans.abort()
+        }
+
+        val event = trans.nextEvent("complete", "abort", "error")
+        return when (event.type) {
+            "abort", "error" -> {
+                val error = wrapException(trans.error)
+                val resultException = result.exceptionOrNull()
+                if (resultException != null) {
+                    resultException.addSuppressed(error)
+                    Result.failure(resultException)
+                } else {
+                    Result.failure(error)
+                }
+            }
+            else /*"complete"*/ -> result
+        }
+    }
+
     override suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R> {
         return withContext(Dispatchers.Unconfined) {
             val tables = Array(usedTables.size) { usedTables[it].name }
             val trans = db.transaction(tables, "readonly")
             val transaction = IndexedDBTransaction(trans)
-            val result = transaction.block()
-
-            val event = trans.nextEvent("complete", "abort", "error")
-            when (event.type) {
-                "complete" -> {}
-                "abort", "error" -> {
-                    return@withContext Result.failure(wrapException(trans.error))
-                }
-            }
-
-            Result.success(result)
+            runTransaction(transaction, block)
         }
     }
 
@@ -43,17 +65,7 @@ internal class IndexedDBUniversalDatabase(
             val tables = Array(usedTables.size) { usedTables[it].name }
             val trans = db.transaction(tables, "readwrite")
             val transaction = IndexedDBWriteTransaction(trans)
-            val result = transaction.block()
-
-            val event = trans.nextEvent("complete", "abort", "error")
-            when (event.type) {
-                "complete" -> {}
-                "abort", "error" -> {
-                    return@withContext Result.failure(wrapException(trans.error))
-                }
-            }
-
-            Result.success(result)
+            runTransaction(transaction, block)
         }
     }
 
@@ -104,7 +116,15 @@ internal class IndexedDBCursor<K: Any, I: Any, V: Any>(
         get() = deserializeValue(table, cursor.value) ?: throw RuntimeException("Unexpected null value: ${cursor.value}")
 
     override suspend fun update(newValue: V) {
-        cursor.update(table.buildValue(key, newValue)).result()
+        try {
+            cursor.update(table.buildValue(key, newValue)).result()
+        } catch (e:dynamic) {
+            val d = catchDOMException(e)
+            if (d.name == "ConstraintError") {
+                throw ConstraintError(d.message)
+            }
+            throw e.unsafeCast<Throwable>()
+        }
     }
 
     override suspend fun delete() {
@@ -115,30 +135,46 @@ internal class IndexedDBCursor<K: Any, I: Any, V: Any>(
 internal open class IndexedDBTransaction(val transaction: IDBTransaction) : Transaction {
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.count(): Int {
-        return queryable().count().result()
+        return queryable().count(range).result()
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getFirst(): V? {
-        return if (increasing) {
+        return if (increasing && range !== undefined) {
             deserializeValue(table, queryable().get(range).result().unsafeCast<dynamic>())
         } else {
-            deserializeValue(table, queryable().openCursor(range, QUERY_DIRECTION_DECREASING).result().unsafeCast<IDBCursorWithValue>().value)
+            deserializeValue(table, queryable().openCursor(range, if (increasing) QUERY_DIRECTION_INCREASING else QUERY_DIRECTION_DECREASING).result().unsafeCast<IDBCursorWithValue?>()?.value)
         }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getAll(limit: Int): List<V> {
+        val noLimit = limit <= 0
         val store = queryable()
-        val request = if (limit <= 0) store.getAll() else store.getAll(limit)
-        val result = request.result().unsafeCast<Array<dynamic>>()
-        if (result.isEmpty()) return emptyList()
-        val deserializedResult = ArrayList<V>(result.size)
-        for (serialized in result) {
-            deserializedResult.add(deserializeValue(table, serialized)!!)
+        if (increasing || noLimit) {
+            val request = if (noLimit) store.getAll(range) else store.getAll(range, limit)
+            val result = request.result().unsafeCast<Array<dynamic>>()
+            if (result.isEmpty()) return emptyList()
+            val deserializedResult = ArrayList<V>(result.size)
+            for (serialized in result) {
+                deserializedResult.add(deserializeValue(table, serialized)!!)
+            }
+            if (!increasing) {
+                deserializedResult.reverse()
+            }
+            return deserializedResult
+        } else {
+            // Decreasing and limited, must implement with a cursor
+            val cursorRequest = store.openCursor(range, QUERY_DIRECTION_DECREASING)
+            val cursor = cursorRequest.result() ?: return emptyList()
+            val result = ArrayList<V>()
+            result.add(deserializeValue(table, cursor.value)!!)
+            while (result.size < limit) {
+                cursor.`continue`()
+                val newCursor = cursorRequest.result() ?: break
+                if (newCursor !== cursor) throw AssertionError("newCursor != cursor")
+                result.add(deserializeValue(table, cursor.value)!!)
+            }
+            return result
         }
-        if (!increasing) {
-            deserializedResult.reverse()
-        }
-        return deserializedResult
     }
 
     override fun <K : Any, I : Any, V : Any> Query<K, I, V>.iterateKeys(): Flow<KeyCursor<K, I>> {
@@ -162,13 +198,14 @@ internal open class IndexedDBTransaction(val transaction: IDBTransaction) : Tran
             val cursor = cursorRequest.result() ?: return@flow // Nothing in it
             val cur = IndexedDBCursor(cursor, table, index)
             emit(cur)
-            //TODO Make sure that if the iteration is cancelled, we won't get here
+            // The flow won't get here if the collection is cancelled
             while (true) {
                 cursor.`continue`()
                 val newCursor = cursorRequest.result() ?: return@flow
                 if (newCursor !== cursor) throw AssertionError("newCursor != cursor")
                 emit(cur)
             }
+            // No cursor close yet: https://github.com/w3c/IndexedDB/issues/185
         }
     }
 
@@ -179,15 +216,37 @@ internal open class IndexedDBTransaction(val transaction: IDBTransaction) : Tran
 
 internal class IndexedDBWriteTransaction(transaction: IDBTransaction) : IndexedDBTransaction(transaction), WriteTransaction {
     override suspend fun Query<*, Nothing, *>.delete() {
-        transaction.objectStore(table.name).delete(range).result()
+        val store = transaction.objectStore(table.name)
+        val request = if (range == undefined) {
+            store.clear()
+        } else {
+            store.delete(range)
+        }
+        request.result()
     }
 
     override suspend fun <K : Any, V : Any> Table<K, V>.add(key: K, value: V) {
-        transaction.objectStore(name).add(buildValue(key, value), buildKey(key)).result()
+        try {
+            transaction.objectStore(name).add(buildValue(key, value), buildKey(key)).result()
+        } catch (e: dynamic) {
+            val d = catchDOMException(e)
+            if (d.name == "ConstraintError") {
+                throw ConstraintError(d.message)
+            }
+            throw e.unsafeCast<Throwable>()
+        }
     }
 
     override suspend fun <K : Any, V : Any> Table<K, V>.set(key: K, value: V) {
-        transaction.objectStore(name).put(buildValue(key, value), buildKey(key)).result()
+        try {
+            transaction.objectStore(name).put(buildValue(key, value), buildKey(key)).result()
+        } catch (e: dynamic) {
+            val d = catchDOMException(e)
+            if (d.name == "ConstraintError") {
+                throw ConstraintError(d.message)
+            }
+            throw e.unsafeCast<Throwable>()
+        }
     }
 
     override fun <K : Any, I : Any, V : Any> Query<K, I, V>.writeIterate(): Flow<MutableCursor<K, I, V>> {
@@ -195,10 +254,10 @@ internal class IndexedDBWriteTransaction(transaction: IDBTransaction) : IndexedD
     }
 }
 
-actual fun <K:Any, V:Any> Table<K, V>.queryAll(): Query<K, Nothing, V> = Query(this, null, undefined, true)
-actual fun <K:Any, V:Any> Table<K, V>.queryOne(value: K): Query<K, Nothing, V> = Query(this, null, IDBKeyRange.only(serialize(keySerializer, value)), true)
-actual fun <K: Any, V: Any> Table<K, V>.query(min: K?, max: K?, openMin: Boolean, openMax: Boolean, increasing: Boolean): Query<K, Nothing, V> = Query(this, null, IDBKeyRange.bound(min?.let { serialize(keySerializer, it) } ?: undefined, max?.let { serialize(keySerializer, it) } ?: undefined, openMin, openMax), increasing)
-actual fun <K: Any, I:Any, V: Any> Index<K, I, V>.query(min: I?, max: I?, openMin: Boolean, openMax: Boolean, increasing: Boolean): Query<K, I, V> = Query(table, this@query, IDBKeyRange.bound(min?.let { serialize(indexSerializer, it) } ?: undefined, max?.let { serialize(indexSerializer, it) } ?: undefined, openMin, openMax), increasing)
+actual fun <K:Any, V:Any> Table<K, V>.queryAll(increasing: Boolean): Query<K, Nothing, V> = Query(this, null, undefined, increasing)
+actual fun <K:Any, V:Any> Table<K, V>.queryOne(value: K): Query<K, Nothing, V> = Query(this, null, IDBKeyRange.only(SerializationHelper.serialize(keySerializer, value)), true)
+actual fun <K: Any, V: Any> Table<K, V>.query(min: K?, max: K?, openMin: Boolean, openMax: Boolean, increasing: Boolean): Query<K, Nothing, V> = Query(this, null, IDBKeyRange.bound(min?.let { SerializationHelper.serialize(keySerializer, it) } ?: undefined, max?.let { SerializationHelper.serialize(keySerializer, it) } ?: undefined, openMin, openMax), increasing)
+actual fun <K: Any, I:Any, V: Any> Index<K, I, V>.query(min: I?, max: I?, openMin: Boolean, openMax: Boolean, increasing: Boolean): Query<K, I, V> = Query(table, this@query, IDBKeyRange.bound(min?.let { SerializationHelper.serialize(indexSerializer, it) } ?: undefined, max?.let { SerializationHelper.serialize(indexSerializer, it) } ?: undefined, openMin, openMax), increasing)
 
 actual class Query<K: Any, I: Any, V: Any>(
     internal val table: Table<K, V>,
@@ -208,9 +267,17 @@ actual class Query<K: Any, I: Any, V: Any>(
     ) {
 
     internal fun IndexedDBTransaction.queryable(): IDBQueryable {
-        val store = transaction.objectStore(table.name)
+        val store = try {
+            transaction.objectStore(table.name)
+        } catch (e: dynamic) {
+            throw IllegalArgumentException("Table $table not found (available: ${JSON.stringify(transaction.db.objectStoreNames)})", e.unsafeCast<Throwable?>())
+        }
         return if (index != null) {
-            store.index(index.name)
+            try {
+                store.index(index.canonicalName)
+            } catch (e: dynamic) {
+                throw IllegalArgumentException("Index $index not found (available: ${JSON.stringify(store.asDynamic().indexNames)})", e.unsafeCast<Throwable?>())
+            }
         } else store
     }
 }
@@ -227,63 +294,64 @@ internal fun <V:Any> deserializeValue(table: Table<*, V>, valueObject: dynamic):
         valueObject[OBJECT_FIELD_NAME]
     }
     val data = arrayBufferToByteArray(serialized)
-    return deserialize(table.valueSerializer, data)
+    return SerializationHelper.deserialize(table.valueSerializer, data)
 }
 
-/** JavaScript is single-threaded, so this is fine.
- * Shared buffer used for de/serialization of all kinds of values. */
-private val readByteData = ByteData()// Does not carry its own buffer
-private val cborRead = CborRead(readByteData)
-private val writeByteData = ByteData()// Does carry its own buffer
-private val cborWrite = CborWrite(writeByteData)
+private object SerializationHelper {
 
-private fun <T: Any> serialize(serializer: CborSerializer<T>, value: T): ByteArray {
-    val byteData = writeByteData
-    byteData.resetForWriting(true)
-    val cborWrite = cborWrite
-    cborWrite.reset()
-    cborWrite.value(value, serializer)
-    return byteData.toByteArray()
+    /** JavaScript is single-threaded, so this is fine.
+     * Shared buffer used for de/serialization of all kinds of values. */
+    private val readByteData = ByteData()// Does not carry its own buffer
+    private val cborRead = CborRead(readByteData)
+    private val writeByteData = ByteData()// Does carry its own buffer
+    private val cborWrite = CborWrite(writeByteData)
+
+    fun <T: Any> serialize(serializer: CborSerializer<T>, value: T): ByteArray {
+        val byteData = writeByteData
+        byteData.resetForWriting(true)
+        val cborWrite = cborWrite
+        cborWrite.reset()
+        cborWrite.value(value, serializer)
+        return byteData.toByteArray()
+    }
+    fun <T: Any> serialize(serializer: KeySerializer<T>, value: T): ByteArray {
+        val byteData = writeByteData
+        byteData.resetForWriting(true)
+        serializer.serialize(byteData, value)
+        return byteData.toByteArray()
+    }
+    fun <T: Any> deserialize(serializer: CborSerializer<T>, value: ByteArray): T {
+        val byteData = readByteData
+        byteData.resetForReading(value)
+        val cborRead = cborRead
+        cborRead.reset()
+        return cborRead.value(serializer)
+    }
+    fun <T: Any> deserialize(serializer: KeySerializer<T>, value: ByteArray): T {
+        val byteData = readByteData
+        byteData.resetForReading(value)
+        return serializer.deserialize(byteData)
+    }
 }
-private fun <T: Any> serialize(serializer: KeySerializer<T>, value: T): ByteArray {
-    val byteData = writeByteData
-    byteData.resetForWriting(true)
-    serializer.serialize(byteData, value)
-    return byteData.toByteArray()
-}
-private fun <T: Any> deserialize(serializer: CborSerializer<T>, value: ByteArray): T {
-    val byteData = readByteData
-    byteData.resetForReading(value)
-    val cborRead = cborRead
-    cborRead.reset()
-    return cborRead.value(serializer)
-}
-private fun <T: Any> deserialize(serializer: KeySerializer<T>, value: ByteArray): T {
-    val byteData = readByteData
-    byteData.resetForReading(value)
-    return serializer.deserialize(byteData)
-}
+
 
 internal fun <KI: Any> deserializeKeyOrIndex(serializer: KeySerializer<KI>, keyIndexObject: dynamic): KI? {
     if (keyIndexObject == null) return null
     val data = arrayBufferToByteArray(keyIndexObject)
-    return deserialize(serializer, data)
+    return SerializationHelper.deserialize(serializer, data)
 }
 
 internal fun <K:Any> Table<K, *>.buildKey(key: K): dynamic {
-    return serialize(keySerializer, key)
+    return SerializationHelper.serialize(keySerializer, key)
 }
 
 internal fun <K: Any, I: Any, V: Any> Index<K, I, V>.buildIndex(key: K, value: V): dynamic {
     val index = indexExtractor(key, value)
-    val byteData = writeByteData
-    byteData.resetForWriting(true)
-    indexSerializer.serialize(byteData, index)
-    return byteData.toByteArray()
+    return SerializationHelper.serialize(indexSerializer, index)
 }
 
 internal fun <K:Any, V:Any> Table<K, V>.buildValue(key:K, value: V): dynamic {
-    val serialized = serialize(valueSerializer, value)
+    val serialized = SerializationHelper.serialize(valueSerializer, value)
     return if (indices.isEmpty()) {
         serialized
     } else {
@@ -401,7 +469,9 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                         for (table in schema.tables) {
                             val store = database.createObjectStore(table.name)
                             for (index in table.indices) {
-                                store.createIndex(index.canonicalName, index.fieldName, index.unique)
+                                val options = js("{}")
+                                options.unique = index.unique
+                                store.createIndex(index.canonicalName, index.fieldName, options)
                             }
                         }
                         if (schema.createdNew != null) {
@@ -416,7 +486,9 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                                 if (table !in currentSchema.tables) {
                                     val store = database.createObjectStore(table.name)
                                     for (index in table.indices) {
-                                        store.createIndex(index.canonicalName, index.fieldName, index.unique)
+                                        val options = js("{}")
+                                        options.unique = index.unique
+                                        store.createIndex(index.canonicalName, index.fieldName, options)
                                     }
                                 }
                             }
