@@ -23,7 +23,9 @@ open class BaseDatabaseConfig(
 }
 
 /** Thrown when attempting to put data into the database that would create duplicates where duplicates are not allowed. */
-class ConstraintError(message: String) : RuntimeException(message)
+class ConstraintException(message: String) : RuntimeException(message)
+/** Thrown when the storage is full and will not take any more data */
+class QuotaException(message: String) : RuntimeException(message)
 
 interface KeyCursor<K:Any, I: Any> {
     val key: K
@@ -36,7 +38,7 @@ interface Cursor<K:Any, I:Any, V:Any> : KeyCursor<K, I> {
 
 interface MutableCursor<K:Any, I:Any, V:Any> : Cursor<K, I, V> {
     /**
-     * @throws ConstraintError when unique index constraint would be violated by this change
+     * @throws ConstraintException when unique index constraint would be violated by this change
      */
     suspend fun update(newValue: V)
     suspend fun delete()
@@ -53,11 +55,13 @@ interface Transaction {
 interface WriteTransaction : Transaction {
     suspend fun Query<*, Nothing, *>.delete()
     /**
-     * @throws ConstraintError when entry with [key] already exists or when unique index constraint would be violated by this change
+     * @throws ConstraintException when entry with [key] already exists or when unique index constraint would be violated by this change
+     * @throws QuotaException
      */
     suspend fun <K:Any, V:Any> Table<K, V>.add(key: K, value: V)
     /**
-     * @throws ConstraintError when unique index constraint would be violated by this change
+     * @throws ConstraintException when unique index constraint would be violated by this change
+     * @throws QuotaException
      */
     suspend fun <K:Any, V:Any> Table<K, V>.set(key: K, value: V)
     fun <K:Any, I:Any, V:Any> Query<K, I, V>.writeIterate(): Flow<MutableCursor<K, I, V>>

@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.darkyen"
-version = "0.1"
+version = "0.2"
 
 repositories {
     mavenCentral()
@@ -20,6 +20,9 @@ kotlin {
         browser {
             testTask {
                 useKarma {
+                    //useCoverage(html = true, lcov = false, teamcity = false) does not work, only computes coverage for test launcher shim
+                    useSourceMapSupport()
+                    useConfigDirectory("karma-config")
                     useFirefoxDeveloperHeadless()
                     useChromiumHeadless()
                 }

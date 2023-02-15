@@ -1,5 +1,6 @@
 package com.darkyen.ud
 
+import com.darkyen.ucbor.CborSerializers
 import io.kotest.assertions.fail
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -10,12 +11,11 @@ import io.kotest.matchers.result.shouldBeFailure
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.shouldBe
 import io.kotest.mpp.timeInMillis
-import kotlinx.coroutines.coroutineScope
+import kotlinx.browser.window
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.joinAll
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
+import kotlin.js.Promise
 import kotlin.random.Random
 
 class DatabaseBirdTest : FunSpec({
@@ -93,15 +93,15 @@ class DatabaseBirdTest : FunSpec({
             withClue("adding same id with add") {
                 db.writeTransaction(birdTable) {
                     birdTable.add(BIRD_ID, bird)
-                }.shouldBeFailure<ConstraintError>()
+                }.shouldBeFailure<ConstraintException>()
                 db.writeTransaction(sightingTable) {
                     sightingTable.add(SIGHTING_ID, sighting)
-                }.shouldBeFailure<ConstraintError>()
+                }.shouldBeFailure<ConstraintException>()
             }
             withClue("adding same unique index") {
                 db.writeTransaction(birdTable) {
                     birdTable.add(6, bird)
-                }.shouldBeFailure<ConstraintError>()
+                }.shouldBeFailure<ConstraintException>()
             }
             withClue("get it") {
                 db.transaction(birdTable) {
@@ -336,6 +336,33 @@ class DatabaseBirdTest : FunSpec({
                 }
 
                 activeTransaction shouldBe "none"
+            }
+        }
+    }
+
+    // Test is disabled for now, because the test browsers have insanely large quotas by default and it does not work
+    // I have tried to set the quotas manually in karma-config, but to no avail
+    xtest("handle quotas") {
+        val dataTable = Table("Data", IntKeySerializer, CborSerializers.BlobSerializer, emptyList())
+        val blockConfig = BackendDatabaseConfig(config.name, Schema(1, listOf(dataTable)))
+
+        val estimate = window.navigator.asDynamic().storage.estimate().unsafeCast<Promise<dynamic>>().await()
+        if (true) throw RuntimeException("Estimate: ${JSON.stringify(estimate)}")
+
+        withDatabase(blockConfig) { db ->
+            // Attempt to insert infinite data to hit quota
+            var blocks = 0
+            val blockMB = 10
+            val dataBlock = ByteArray(1024 * 1024 * blockMB) { it.toByte() }
+            withClue({"Managed to fit $blocks MB"}) {
+                while (true) {
+                    db.writeTransaction(dataTable) {
+                        dataTable.add(blocks++, dataBlock)
+                    }.onFailure { e ->
+                        val dom = catchDOMException(e)
+                        throw RuntimeException("DOM Exception at block ${blocks} (${blocks*blockMB} MB): ${dom.name} - ${dom.message}")
+                    }
+                }
             }
         }
     }

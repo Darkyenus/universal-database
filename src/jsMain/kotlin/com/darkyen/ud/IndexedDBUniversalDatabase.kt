@@ -81,6 +81,7 @@ private suspend fun <T> IDBRequest<T>.result():T {
             cont.resume(this@result.result)
         }
         onerror = {
+            it.preventDefault()
             cont.resumeWithException(wrapException(this@result.error))
         }
     }
@@ -121,7 +122,9 @@ internal class IndexedDBCursor<K: Any, I: Any, V: Any>(
         } catch (e:dynamic) {
             val d = catchDOMException(e)
             if (d.name == "ConstraintError") {
-                throw ConstraintError(d.message)
+                throw ConstraintException(d.message)
+            } else if (d.name == "QuotaExceededError") {
+                throw QuotaException(d.message)
             }
             throw e.unsafeCast<Throwable>()
         }
@@ -231,7 +234,9 @@ internal class IndexedDBWriteTransaction(transaction: IDBTransaction) : IndexedD
         } catch (e: dynamic) {
             val d = catchDOMException(e)
             if (d.name == "ConstraintError") {
-                throw ConstraintError(d.message)
+                throw ConstraintException(d.message)
+            } else if (d.name == "QuotaExceededError") {
+                throw QuotaException(d.message)
             }
             throw e.unsafeCast<Throwable>()
         }
@@ -243,7 +248,9 @@ internal class IndexedDBWriteTransaction(transaction: IDBTransaction) : IndexedD
         } catch (e: dynamic) {
             val d = catchDOMException(e)
             if (d.name == "ConstraintError") {
-                throw ConstraintError(d.message)
+                throw ConstraintException(d.message)
+            } else if (d.name == "QuotaExceededError") {
+                throw QuotaException(d.message)
             }
             throw e.unsafeCast<Throwable>()
         }
