@@ -52,10 +52,15 @@ class DatabaseBirdTest : FunSpec({
                         withClue(name) {
                             query.count() shouldBe 0
                             query.getFirst() shouldBe null
+                            query.getFirstKey() shouldBe null
                             query.getAll() shouldBe listOf()
+                            query.getAllKeys() shouldBe listOf()
                             query.getAll(10) shouldBe listOf()
+                            query.getAllKeys(10) shouldBe listOf()
                             query.getAll(1) shouldBe listOf()
+                            query.getAllKeys(1) shouldBe listOf()
                             query.getAll(0) shouldBe listOf()
+                            query.getAllKeys(0) shouldBe listOf()
                             query.iterate().map { cursor -> cursor.key to cursor.value }.toList(ArrayList()) shouldBe listOf()
                             query.iterateKeys().map { cursor -> cursor.key }.toList(ArrayList()) shouldBe listOf()
                         }
@@ -66,10 +71,15 @@ class DatabaseBirdTest : FunSpec({
                         withClue(name) {
                             query.count() shouldBe 0
                             query.getFirst() shouldBe null
+                            query.getFirstKey() shouldBe null
                             query.getAll() shouldBe listOf()
+                            query.getAllKeys() shouldBe listOf()
                             query.getAll(10) shouldBe listOf()
+                            query.getAllKeys(10) shouldBe listOf()
                             query.getAll(1) shouldBe listOf()
+                            query.getAllKeys(1) shouldBe listOf()
                             query.getAll(0) shouldBe listOf()
+                            query.getAllKeys(0) shouldBe listOf()
                             query.iterate().map { cursor -> cursor.key to cursor.value }.toList(ArrayList()) shouldBe listOf()
                             query.iterateKeys().map { cursor -> cursor.key }.toList(ArrayList()) shouldBe listOf()
                         }
@@ -109,11 +119,17 @@ class DatabaseBirdTest : FunSpec({
                         withClue("bird $name") {
                             withClue("count") { query.count() shouldBe 1 }
                             withClue("getFirst") { query.getFirst() shouldBe bird }
+                            withClue("getFirstKey") { query.getFirstKey() shouldBe BIRD_ID }
                             withClue("getAll") { query.getAll() shouldBe listOf(bird) }
+                            withClue("getAllKeys") { query.getAllKeys() shouldBe listOf(BIRD_ID) }
                             withClue("getAll(10)") { query.getAll(10) shouldBe listOf(bird) }
+                            withClue("getAllKeys(10)") { query.getAllKeys(10) shouldBe listOf(BIRD_ID) }
                             withClue("getAll(1)") { query.getAll(1) shouldBe listOf(bird) }
+                            withClue("getAllKeys(1)") { query.getAllKeys(1) shouldBe listOf(BIRD_ID) }
                             withClue("getAll(0)") { query.getAll(0) shouldBe listOf(bird) }
+                            withClue("getAllKeys(0)") { query.getAllKeys(0) shouldBe listOf(BIRD_ID) }
                             withClue("getAll(-5)") { query.getAll(-5) shouldBe listOf(bird) }
+                            withClue("getAllKeys(-5)") { query.getAllKeys(-5) shouldBe listOf(BIRD_ID) }
                             withClue("iterate") { query.iterate().map { cursor -> cursor.key to cursor.value }.toList(ArrayList()) shouldContainExactly listOf(BIRD_ID to bird) }
                             withClue("iterateKeys") { query.iterateKeys().map { cursor -> cursor.key }.toList(ArrayList()) shouldContainExactly listOf(BIRD_ID) }
                         }
@@ -125,11 +141,17 @@ class DatabaseBirdTest : FunSpec({
                         withClue("sighting $name") {
                             withClue("count") { query.count() shouldBe 1 }
                             withClue("getFirst") { query.getFirst() shouldBe sighting }
+                            withClue("getFirstKey") { query.getFirstKey() shouldBe SIGHTING_ID }
                             withClue("getAll") { query.getAll() shouldBe listOf(sighting) }
+                            withClue("getAllKeys") { query.getAllKeys() shouldBe listOf(SIGHTING_ID) }
                             withClue("getAll(10)") { query.getAll(10) shouldBe listOf(sighting) }
+                            withClue("getAllKeys(10)") { query.getAllKeys(10) shouldBe listOf(SIGHTING_ID) }
                             withClue("getAll(1)") { query.getAll(1) shouldBe listOf(sighting) }
+                            withClue("getAllKeys(1)") { query.getAllKeys(1) shouldBe listOf(SIGHTING_ID) }
                             withClue("getAll(0)") { query.getAll(0) shouldBe listOf(sighting) }
+                            withClue("getAllKeys(0)") { query.getAllKeys(0) shouldBe listOf(SIGHTING_ID) }
                             withClue("getAll(-5)") { query.getAll(-5) shouldBe listOf(sighting) }
+                            withClue("getAllKeys(-5)") { query.getAllKeys(-5) shouldBe listOf(SIGHTING_ID) }
                             withClue("iterate") { query.iterate().map { cursor -> cursor.key to cursor.value }.toList(ArrayList()) shouldContainExactly listOf(SIGHTING_ID to sighting) }
                             withClue("iterateKeys") { query.iterateKeys().map { cursor -> cursor.key }.toList(ArrayList()) shouldContainExactly listOf(SIGHTING_ID) }
                         }
@@ -140,19 +162,26 @@ class DatabaseBirdTest : FunSpec({
                 db.transaction(birdTable) {
                     withClue("bird count") { birdTable.queryOne(88).count() shouldBe 0 }
                     withClue("bird getFirst") { birdTable.queryOne(88).getFirst() shouldBe null }
+                    withClue("bird getFirstKey") { birdTable.queryOne(88).getFirstKey() shouldBe null }
                     withClue("bird getAll") { birdTable.queryOne(88).getAll() shouldBe listOf() }
                     withClue("bird getAll") { birdTable.query(BIRD_ID, 88, openMin = true).getAll() shouldBe listOf() }
                     withClue("bird getAll") { birdTable.query(BIRD_ID, 88, openMin = true, increasing = false).getAll() shouldBe listOf() }
+                    withClue("bird getAllKeys") { birdTable.queryOne(88).getAllKeys() shouldBe listOf() }
+                    withClue("bird getAllKeys") { birdTable.query(BIRD_ID, 88, openMin = true).getAllKeys() shouldBe listOf() }
+                    withClue("bird getAllKeys") { birdTable.query(BIRD_ID, 88, openMin = true, increasing = false).getAllKeys() shouldBe listOf() }
                 }.shouldBeSuccess()
                 db.transaction(sightingTable) {
                     withClue("bird count") { sightingTable.queryOne(88).count() shouldBe 0 }
                     withClue("bird getFirst") { sightingTable.queryOne(88).getFirst() shouldBe null }
+                    withClue("bird getFirstKey") { sightingTable.queryOne(88).getFirstKey() shouldBe null }
                     withClue("bird getAll") { sightingTable.queryOne(88).getAll() shouldBe listOf() }
                     withClue("bird getAll") { sightingTable.query(SIGHTING_ID, 88, openMin = true).getAll() shouldBe listOf() }
                     withClue("bird getAll") { sightingTable.query(SIGHTING_ID, 88, openMin = true, increasing = false).getAll() shouldBe listOf() }
+                    withClue("bird getAllKeys") { sightingTable.queryOne(88).getAllKeys() shouldBe listOf() }
+                    withClue("bird getAllKeys") { sightingTable.query(SIGHTING_ID, 88, openMin = true).getAllKeys() shouldBe listOf() }
+                    withClue("bird getAllKeys") { sightingTable.query(SIGHTING_ID, 88, openMin = true, increasing = false).getAllKeys() shouldBe listOf() }
                 }.shouldBeSuccess()
             }
-
         }
     }
 
@@ -170,6 +199,26 @@ class DatabaseBirdTest : FunSpec({
                             sightingTable.add(i.toLong(), sighting)
                         }
                     }
+                }.shouldBeSuccess()
+            }
+
+            // Get all
+            withClue("get all birds") {
+                db.transaction(birdTable) {
+                    birdTable.queryAll().getAll() shouldContainExactly birds
+                    birdTable.queryAll(increasing = false).getAll() shouldContainExactly birds.asReversed()
+                    val longIndices = birds.indices.map { it.toLong() }
+                    birdTable.queryAll().getAllKeys() shouldContainExactly longIndices
+                    birdTable.queryAll(increasing = false).getAllKeys() shouldContainExactly longIndices.asReversed()
+                }.shouldBeSuccess()
+            }
+            withClue("get all sightings") {
+                db.transaction(sightingTable) {
+                    sightingTable.queryAll().getAll() shouldContainExactly sightings
+                    sightingTable.queryAll(increasing = false).getAll() shouldContainExactly sightings.asReversed()
+                    val longIndices = sightings.indices.map { it.toLong() }
+                    sightingTable.queryAll().getAllKeys() shouldContainExactly longIndices
+                    sightingTable.queryAll(increasing = false).getAllKeys() shouldContainExactly longIndices.asReversed()
                 }.shouldBeSuccess()
             }
 

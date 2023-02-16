@@ -149,6 +149,14 @@ internal open class IndexedDBTransaction(val transaction: IDBTransaction) : Tran
         }
     }
 
+    override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getFirstKey(): K? {
+        return if (increasing && range !== undefined) {
+            deserializeKeyOrIndex(table.keySerializer, queryable().getKey(range).result().unsafeCast<dynamic>())
+        } else {
+            deserializeKeyOrIndex(table.keySerializer, queryable().openKeyCursor(range, if (increasing) QUERY_DIRECTION_INCREASING else QUERY_DIRECTION_DECREASING).result().unsafeCast<IDBCursor?>()?.primaryKey)
+        }
+    }
+
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getAll(limit: Int): List<V> {
         val noLimit = limit <= 0
         val store = queryable()
@@ -175,6 +183,37 @@ internal open class IndexedDBTransaction(val transaction: IDBTransaction) : Tran
                 val newCursor = cursorRequest.result() ?: break
                 if (newCursor !== cursor) throw AssertionError("newCursor != cursor")
                 result.add(deserializeValue(table, cursor.value)!!)
+            }
+            return result
+        }
+    }
+
+    override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getAllKeys(limit: Int): List<K> {
+        val noLimit = limit <= 0
+        val store = queryable()
+        if (increasing || noLimit) {
+            val request = if (noLimit) store.getAllKeys(range) else store.getAllKeys(range, limit)
+            val result = request.result().unsafeCast<Array<dynamic>>()
+            if (result.isEmpty()) return emptyList()
+            val deserializedResult = ArrayList<K>(result.size)
+            for (serialized in result) {
+                deserializedResult.add(deserializeKeyOrIndex(table.keySerializer, serialized)!!)
+            }
+            if (!increasing) {
+                deserializedResult.reverse()
+            }
+            return deserializedResult
+        } else {
+            // Decreasing and limited, must implement with a cursor
+            val cursorRequest = store.openKeyCursor(range, QUERY_DIRECTION_DECREASING)
+            val cursor = cursorRequest.result() ?: return emptyList()
+            val result = ArrayList<K>()
+            result.add(deserializeKeyOrIndex(table.keySerializer, cursor.primaryKey)!!)
+            while (result.size < limit) {
+                cursor.`continue`()
+                val newCursor = cursorRequest.result() ?: break
+                if (newCursor !== cursor) throw AssertionError("newCursor != cursor")
+                result.add(deserializeKeyOrIndex(table.keySerializer, cursor.primaryKey)!!)
             }
             return result
         }

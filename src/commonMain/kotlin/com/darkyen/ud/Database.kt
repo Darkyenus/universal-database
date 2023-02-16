@@ -47,7 +47,9 @@ interface MutableCursor<K:Any, I:Any, V:Any> : Cursor<K, I, V> {
 interface Transaction {
     suspend fun <K:Any, I:Any, V:Any> Query<K, I, V>.count(): Int
     suspend fun <K:Any, I:Any, V:Any> Query<K, I, V>.getFirst(): V?
+    suspend fun <K:Any, I:Any, V:Any> Query<K, I, V>.getFirstKey(): K?
     suspend fun <K:Any, I:Any, V:Any> Query<K, I, V>.getAll(limit: Int = 0): List<V>
+    suspend fun <K:Any, I:Any, V:Any> Query<K, I, V>.getAllKeys(limit: Int = 0): List<K>
     fun <K:Any, I:Any, V:Any> Query<K, I, V>.iterateKeys(): Flow<KeyCursor<K, I>>
     fun <K:Any, I:Any, V:Any> Query<K, I, V>.iterate(): Flow<Cursor<K, I, V>>
 }
