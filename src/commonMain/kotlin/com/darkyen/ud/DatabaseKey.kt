@@ -21,6 +21,16 @@ interface KeySerializer<K:Any> {
     fun deserialize(r: ByteRead): K
 }
 
+/** A boolean key */
+object BooleanKeySerializer : KeySerializer<Boolean> {
+    override fun serialize(w: ByteWrite, value: Boolean) {
+        w.writeRawBE(if (value) 1L else 0L, 1)
+    }
+    override fun deserialize(r: ByteRead): Boolean {
+        return r.readRawBE(1) != 0L
+    }
+}
+
 /** Treats [Long] as unsigned. */
 object UnsignedLongKeySerializer : KeySerializer<Long> {
     override fun serialize(w: ByteWrite, value: Long) {
