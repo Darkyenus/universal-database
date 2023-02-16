@@ -1,12 +1,13 @@
 package com.darkyen.ud
 
 import com.darkyen.ucbor.CborSerializers
-import com.juul.indexeddb.deleteDatabase
+import com.juul.indexeddb.external.indexedDB
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainInOrder
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.types.shouldBeInstanceOf
+import kotlinx.browser.window
 
 val databaseName = "BirdDB"
 
@@ -14,7 +15,7 @@ val databaseName = "BirdDB"
 class DatabaseMigrationTest : FunSpec({
 
     afterEach {
-        deleteDatabase(databaseName)
+        window.indexedDB!!.deleteDatabase(databaseName).result()
     }
 
     test("database opening simple") {

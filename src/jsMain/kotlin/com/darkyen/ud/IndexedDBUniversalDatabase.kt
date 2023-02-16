@@ -75,7 +75,7 @@ internal class IndexedDBUniversalDatabase(
     }
 }
 
-private suspend fun <T> IDBRequest<T>.result():T {
+internal suspend fun <T> IDBRequest<T>.result():T {
     return suspendCancellableCoroutine { cont ->
         onsuccess = {
             cont.resume(this@result.result)

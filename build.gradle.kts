@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.darkyen"
-version = "0.2"
+version = "0.3"
 
 repositories {
     mavenCentral()
@@ -16,7 +16,7 @@ repositories {
 
 kotlin {
     //android {}
-    js(IR) {
+    js(BOTH) {
         browser {
             testTask {
                 useKarma {
@@ -43,7 +43,7 @@ kotlin {
                 api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
 
                 // CBOR
-                api("com.darkyen.ultralight-cbor:ultralight-cbor:0.2")
+                api("com.darkyen.ultralight-cbor:ultralight-cbor:0.3")
             }
         }
         val commonTest by getting {
@@ -63,15 +63,10 @@ kotlin {
         val jsMain by getting {
             dependencies {
                 // IndexedDB external declarations
-                implementation("com.juul.indexeddb:external:0.6.0")
+                //implementation("com.juul.indexeddb:external:0.6.0") Use when we drop LEGACY, now it is copy-pasted
             }
         }
-        val jsTest by getting {
-            dependencies {
-                // IndexedDB wrapper
-                implementation("com.juul.indexeddb:core:0.6.0")
-            }
-        }
+        val jsTest by getting
     }
 }
 
