@@ -470,7 +470,7 @@ internal fun <K:Any, V:Any> Table<K, V>.buildValue(key:K, value: V): dynamic {
 
 @OptIn(ExperimentalCoroutinesApi::class)
 internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResult {
-    val factory = window.indexedDB ?: return OpenDBResult.StorageNotSupported
+    val factory = window.indexedDB ?: return OpenDBResult.StorageNotSupported("IndexedDB not supported")
     val validSchema = config.schema
     val schema = validSchema.last()
 
@@ -480,8 +480,10 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
             factory.open(config.name, schema.version)
         }
     } catch (e: Throwable) {
-        if (e is KDOMException && e.name == "SecurityError") {
-            return OpenDBResult.StorageNotSupported
+        if (e is KDOMException) {
+            if (e.name == "SecurityError") {
+                return OpenDBResult.StorageNotSupported("IndexedDB.open SecurityError")
+            }
         }
         return OpenDBResult.Failure(e)
     }
@@ -507,6 +509,9 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                         "AbortError" -> {
                             cont.resumeWithException(CancellationException("Opening was aborted (${e.message})"))
                             return@error
+                        }
+                        "InvalidStateError" -> {
+                            cont.resume(OpenDBResult.StorageNotSupported("IndexedDB InvalidStateError"))
                         }
                     }
                 }

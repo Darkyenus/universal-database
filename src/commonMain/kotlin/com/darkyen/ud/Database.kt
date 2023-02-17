@@ -150,7 +150,7 @@ sealed class OpenDBResult {
     /** Database can't be opened, because the storage already contains a newer version */
     object NewerVersionExists : OpenDBResult()
     /** Database can't be opened, because the platform does not support the underlying technology */
-    object StorageNotSupported : OpenDBResult()
+    class StorageNotSupported(val reason: String) : OpenDBResult()
     /** Database can't be opened, because there is not enough memory to do so */
     object OutOfMemory : OpenDBResult()
     /** Some other error has occurred, such as IO problem */
