@@ -3,8 +3,10 @@
 // https://github.com/JetBrains/kotlin/blob/master/libraries/tools/kotlin-gradle-plugin/src/common/kotlin/org/jetbrains/kotlin/gradle/targets/js/testing/karma/KotlinKarma.kt#L483
 
 config.set({
-    browserNoActivityTimeout: 60000,
-    browserDisconnectTimeout: 60000
+    singleRun: true,
+    logLevel: config.LOG_DEBUG
+    //, browserNoActivityTimeout: 240000
+    //, browserDisconnectTimeout: 240000
 });
 
 // Used to print what the config is

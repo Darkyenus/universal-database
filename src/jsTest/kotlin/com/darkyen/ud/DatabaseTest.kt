@@ -10,15 +10,20 @@ import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.result.shouldBeFailure
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContainIgnoringCase
+import io.kotest.matchers.throwable.shouldHaveMessage
+import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.mpp.timeInMillis
 import kotlinx.browser.window
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 import kotlin.js.Promise
 import kotlin.random.Random
 
-class DatabaseBirdTest : FunSpec({
+class DatabaseTest : FunSpec({
 
     val birdlifeIDIndex = Index<Long, Long, Bird>("BirdlifeID", { _, v -> v.birdlifeId }, UnsignedLongKeySerializer, true)
     val conservationIndex = Index<Long, ConservationStatus, Bird>("Conservation", { _, v -> v.conservationStatus }, ConservationStatus.KEY_SERIALIZER, false)
@@ -37,6 +42,59 @@ class DatabaseBirdTest : FunSpec({
 
     afterEach {
         deleteUniversalDatabase(config)
+    }
+
+    test("suspend functions are banned") {
+        withDatabase(config) { db ->
+            withClue("delay") {
+                db.transaction(birdTable) {
+                    birdTable.queryAll().count() shouldBe 0
+
+                    delay(100)
+                }.shouldBeFailure { err ->
+                    err.shouldBeInstanceOf<IllegalStateException>()
+                    err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
+                }
+            }
+
+            withClue("fetch") {
+                db.transaction(birdTable) {
+                    birdTable.queryAll().count() shouldBe 0
+
+                    window.fetch("/the-url-does-not-matter-suspend-does").await()
+                }.shouldBeFailure { err ->
+                    err.shouldBeInstanceOf<IllegalStateException>()
+                    err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
+                }
+            }
+
+            withClue("redispatch") {
+                db.transaction(birdTable) {
+                    birdTable.queryAll().count() shouldBe 0
+
+                    coroutineScope {
+                        val jobs = List(1000) { async {
+                            (0..1000).fold(0) { i, a -> i + a }
+                        } }
+                        withContext(Dispatchers.Default) {
+                            withContext(Dispatchers.Main) {
+                                jobs.awaitAll()
+                            }
+                        }
+                    }
+
+                    // Didn't reliably fail without this, not sure if that was supposed to happen or not
+                    suspendCoroutine { cont ->
+                        window.setTimeout({
+                            cont.resume(Unit)
+                        }, 10)
+                    }
+                }.shouldBeFailure { err ->
+                    err.shouldBeInstanceOf<IllegalStateException>()
+                    err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
+                }
+            }
+        }
     }
 
     test("single") {
@@ -407,10 +465,7 @@ class DatabaseBirdTest : FunSpec({
                 while (true) {
                     db.writeTransaction(dataTable) {
                         dataTable.add(blocks++, dataBlock)
-                    }.onFailure { e ->
-                        val dom = catchDOMException(e)
-                        throw RuntimeException("DOM Exception at block ${blocks} (${blocks*blockMB} MB): ${dom.name} - ${dom.message}")
-                    }
+                    }//TODO
                 }
             }
         }

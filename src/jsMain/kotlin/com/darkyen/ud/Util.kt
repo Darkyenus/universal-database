@@ -1,67 +1,45 @@
 package com.darkyen.ud
 
-import kotlinx.browser.window
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.CancellationException
 import org.khronos.webgl.ArrayBuffer
 import org.khronos.webgl.Int8Array
-import org.w3c.dom.events.Event
-import org.w3c.dom.events.EventListener
-import org.w3c.dom.events.EventTarget
-import kotlin.coroutines.resume
 
-/**
- * Return the next event of one of the specified [types] emitted by the target.
- * The type of the event is in [Event.type].
- */
-internal suspend fun EventTarget.nextEvent(
-    vararg types: String,
-): Event = suspendCancellableCoroutine { continuation ->
-    val eventListener = object : EventListener {
-        fun remove() {
-            for (type in types) {
-                removeEventListener(type, this)
-            }
+internal fun <T> Result<T>.addSuppressed(t: Throwable): Result<T> {
+    return this.fold({ Result.failure(t) }, { e ->
+        e.addSuppressed(t)
+        Result.failure(e)
+    })
+}
+
+class KDOMException(val name: String, val domMessage: String) : RuntimeException("$name: $domMessage")
+
+internal inline fun <R> reinterpretExceptions(block: () -> R): R {
+    try {
+        return block()
+    } catch (e: dynamic) {
+        throw reinterpretException(e)
+    }
+}
+
+internal fun reinterpretException(e: dynamic): Throwable {
+    val t: Throwable = if (js("e instanceof DOMException").unsafeCast<Boolean>()) {
+        if (e.name == "ConstraintError") ConstraintException(e.message.unsafeCast<String>())
+        else if (e.name == "QuotaExceededError") ConstraintException(e.message.unsafeCast<String>())
+        else KDOMException(e.name.unsafeCast<String>(), e.message.unsafeCast<String>())
+    } else if (js("e instanceof Error").unsafeCast<Boolean>()) {
+        // https://kotlinlang.org/docs/js-to-kotlin-interop.html#primitive-arrays
+        if (e is CancellationException) {
+            throw e.unsafeCast<CancellationException>()
         }
-
-        override fun handleEvent(event: Event) {
-            remove()
-            if (event.type !in types) {
-                continuation.cancel(AssertionError("Event.type = ${event.type}, expected one of ${types.contentToString()}"))
-            }
-            continuation.resume(event)
-        }
+        e.unsafeCast<Throwable>()
+    } else {
+        RuntimeException("Raw exception (${e}})")
     }
-
-    for (type in types) {
-        addEventListener(type, eventListener)
-    }
-    continuation.invokeOnCancellation {
-        eventListener.remove()
-    }
-}
-
-internal external class DOMException {
-    val name: String
-    val message: String
-}
-
-internal fun wrapException(e: dynamic): Throwable {
-    if (e is Throwable) return e.unsafeCast<Throwable>()
-    val dom = asDOMException(e)
-    if (dom != null) return RuntimeException("DOMException(${dom.name}: ${dom.message})")
-    return RuntimeException("JS(${e})")
-}
-
-internal fun asDOMException(e: dynamic): DOMException? {
-    if (jsTypeOf(e) == "object" && window.asDynamic().DOMException.prototype.isPrototypeOf(e).unsafeCast<Boolean>()) {
-        return e.unsafeCast<DOMException>()
-    }
-    return null
-}
-
-/** Returns [e] as [DOMException] if it is one, rethrows [e] otherwise. */
-internal fun catchDOMException(e: dynamic): DOMException {
-    return asDOMException(e) ?: throw e.unsafeCast<Throwable>()
+    try {
+        console.log("UniversalDatabase error", e, t)
+        console.asDynamic().trace()
+    } catch (ignored: dynamic) {}
+    return t
 }
 
 /** Turns [v], which is asserted to be an [ArrayBuffer] into ordinary [ByteArray]. */

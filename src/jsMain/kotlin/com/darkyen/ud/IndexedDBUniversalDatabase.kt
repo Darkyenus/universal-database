@@ -9,8 +9,77 @@ import kotlinx.browser.window
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.*
+
+internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transaction: T, noinline block: suspend T.() -> R): Result<R> {
+    return withContext(Dispatchers.Unconfined) {
+        coroutineScope {
+            val trans = transaction.transaction
+            val parentJob = coroutineContext[Job]!!
+            val transactionJob = CompletableDeferred<Boolean/*Completed*/>(parentJob)
+
+            trans.oncomplete = {
+                transactionJob.complete(true)
+            }
+            trans.onabort = {
+                it.preventDefault()
+                it.stopPropagation()
+                transactionJob.complete(false)
+            }
+            trans.onerror = {
+                console.info("!!!! Uncaught error in transaction !!!!")
+                it.preventDefault()
+                it.stopPropagation()
+                trans.abort()
+                parentJob.cancel("Uncaught error in transaction", reinterpretException(trans.error))
+            }
+
+            val result = try {
+                val result = transaction.block()
+                Result.success(result)
+            } catch (e: dynamic) {
+                Result.failure(reinterpretException(e))
+            }
+
+            ensureActive()// We might have been cancelled by an uncaught error
+            // If all goes well, the transaction should still be running
+            val completedTooSoon = transactionJob.isCompleted
+
+            // It should finish after a while
+            if (!completedTooSoon) {
+                if (result.isSuccess) {
+                    if (trans.asDynamic().commit.unsafeCast<Boolean>()) {
+                        trans.commit()
+                    }
+                } else {
+                    trans.abort()
+                }
+            }
+
+            val complete = transactionJob.await()
+            if (complete) {
+                if (completedTooSoon && result.isSuccess) {
+                    val e = IllegalStateException("Transaction completed before block, this indicates incorrect use of suspend functions")
+                    if (trans.error != null) {
+                        e.addSuppressed(reinterpretException(trans.error))
+                    }
+                    Result.failure(e)
+                } else {
+                    // All ok
+                    result
+                }
+            } else {
+                // Aborted
+                if (trans.error == null) {
+                    // Aborted manually through abort() above
+                    result.addSuppressed(RuntimeException("Transaction aborted due to block error"))
+                } else {
+                    result.addSuppressed(RuntimeException("Transaction aborted", reinterpretException(trans.error)))
+                }
+            }
+        }
+    }
+}
 
 internal class IndexedDBUniversalDatabase(
     private val db: IDBDatabase
@@ -18,41 +87,9 @@ internal class IndexedDBUniversalDatabase(
 
     internal var closed = false
 
-    @Suppress("REDUNDANT_INLINE_SUSPEND_FUNCTION_TYPE")
-    private suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transaction: T, block: suspend T.() -> R): Result<R> {
-        val result = try {
-            Result.success(transaction.block())
-        } catch (e: dynamic) {
-            Result.failure(e.unsafeCast<Throwable>())
-        }
-
-        val trans = transaction.transaction
-        if (result.isSuccess) {
-            if (trans.asDynamic().commit.unsafeCast<Boolean>()) {
-                trans.commit()
-            }
-        } else {
-            trans.abort()
-        }
-
-        val event = trans.nextEvent("complete", "abort", "error")
-        return when (event.type) {
-            "abort", "error" -> {
-                val error = wrapException(trans.error)
-                val resultException = result.exceptionOrNull()
-                if (resultException != null) {
-                    resultException.addSuppressed(error)
-                    Result.failure(resultException)
-                } else {
-                    Result.failure(error)
-                }
-            }
-            else /*"complete"*/ -> result
-        }
-    }
-
     override suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R> {
-        return withContext(Dispatchers.Unconfined) {
+        if (closed) throw IllegalStateException("Database is closed")
+        return reinterpretExceptions {
             val tables = Array(usedTables.size) { usedTables[it].name }
             val trans = db.transaction(tables, "readonly")
             val transaction = IndexedDBTransaction(trans)
@@ -61,7 +98,8 @@ internal class IndexedDBUniversalDatabase(
     }
 
     override suspend fun <R> writeTransaction(vararg usedTables: Table<*, *>, block: suspend WriteTransaction.() -> R): Result<R> {
-        return withContext(Dispatchers.Unconfined) {
+        if (closed) throw IllegalStateException("Database is closed")
+        return reinterpretExceptions {
             val tables = Array(usedTables.size) { usedTables[it].name }
             val trans = db.transaction(tables, "readwrite")
             val transaction = IndexedDBWriteTransaction(trans)
@@ -76,13 +114,16 @@ internal class IndexedDBUniversalDatabase(
 }
 
 internal suspend fun <T> IDBRequest<T>.result():T {
-    return suspendCancellableCoroutine { cont ->
-        onsuccess = {
-            cont.resume(this@result.result)
-        }
-        onerror = {
-            it.preventDefault()
-            cont.resumeWithException(wrapException(this@result.error))
+    return withContext(Dispatchers.Unconfined) {
+         suspendCancellableCoroutine { cont ->
+            onsuccess = {
+                cont.resume(this@result.result)
+            }
+            onerror = {
+                it.preventDefault()
+                it.stopPropagation()
+                cont.resumeWithException(reinterpretException(this@result.error))
+            }
         }
     }
 }
@@ -117,137 +158,168 @@ internal class IndexedDBCursor<K: Any, I: Any, V: Any>(
         get() = deserializeValue(table, cursor.value) ?: throw RuntimeException("Unexpected null value: ${cursor.value}")
 
     override suspend fun update(newValue: V) {
-        try {
-            cursor.update(table.buildValue(key, newValue)).result()
-        } catch (e:dynamic) {
-            val d = catchDOMException(e)
-            if (d.name == "ConstraintError") {
-                throw ConstraintException(d.message)
-            } else if (d.name == "QuotaExceededError") {
-                throw QuotaException(d.message)
-            }
-            throw e.unsafeCast<Throwable>()
+        reinterpretExceptions {
+            cursor.update(table.buildValue(key, newValue))
+                .result()
         }
     }
 
     override suspend fun delete() {
-        cursor.delete().result()
+        reinterpretExceptions {
+            cursor.delete()
+                .result()
+        }
     }
 }
 
 internal open class IndexedDBTransaction(val transaction: IDBTransaction) : Transaction {
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.count(): Int {
-        return queryable().count(range).result()
+        return reinterpretExceptions {
+            queryable().count(range)
+                .result()
+        }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getFirst(): V? {
-        return if (increasing && range !== undefined) {
-            deserializeValue(table, queryable().get(range).result().unsafeCast<dynamic>())
-        } else {
-            deserializeValue(table, queryable().openCursor(range, if (increasing) QUERY_DIRECTION_INCREASING else QUERY_DIRECTION_DECREASING).result().unsafeCast<IDBCursorWithValue?>()?.value)
+        return reinterpretExceptions {
+            if (increasing && range !== undefined) {
+                deserializeValue(table, queryable().get(range)
+                    .result()
+                    .unsafeCast<dynamic>())
+            } else {
+                deserializeValue(table, queryable().openCursor(range, if (increasing) QUERY_DIRECTION_INCREASING else QUERY_DIRECTION_DECREASING)
+                    .result()
+                    .unsafeCast<IDBCursorWithValue?>()?.value)
+            }
         }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getFirstKey(): K? {
-        return if (increasing && range !== undefined) {
-            deserializeKeyOrIndex(table.keySerializer, queryable().getKey(range).result().unsafeCast<dynamic>())
-        } else {
-            deserializeKeyOrIndex(table.keySerializer, queryable().openKeyCursor(range, if (increasing) QUERY_DIRECTION_INCREASING else QUERY_DIRECTION_DECREASING).result().unsafeCast<IDBCursor?>()?.primaryKey)
+        return reinterpretExceptions {
+            if (increasing && range !== undefined) {
+                deserializeKeyOrIndex(table.keySerializer, queryable().getKey(range)
+                    .result()
+                    .unsafeCast<dynamic>())
+            } else {
+                deserializeKeyOrIndex(table.keySerializer, queryable().openKeyCursor(range, if (increasing) QUERY_DIRECTION_INCREASING else QUERY_DIRECTION_DECREASING)
+                    .result()
+                    .unsafeCast<IDBCursor?>()?.primaryKey)
+            }
         }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getAll(limit: Int): List<V> {
-        val noLimit = limit <= 0
-        val store = queryable()
-        if (increasing || noLimit) {
-            val request = if (noLimit) store.getAll(range) else store.getAll(range, limit)
-            val result = request.result().unsafeCast<Array<dynamic>>()
-            if (result.isEmpty()) return emptyList()
-            val deserializedResult = ArrayList<V>(result.size)
-            for (serialized in result) {
-                deserializedResult.add(deserializeValue(table, serialized)!!)
-            }
-            if (!increasing) {
-                deserializedResult.reverse()
-            }
-            return deserializedResult
-        } else {
-            // Decreasing and limited, must implement with a cursor
-            val cursorRequest = store.openCursor(range, QUERY_DIRECTION_DECREASING)
-            val cursor = cursorRequest.result() ?: return emptyList()
-            val result = ArrayList<V>()
-            result.add(deserializeValue(table, cursor.value)!!)
-            while (result.size < limit) {
-                cursor.`continue`()
-                val newCursor = cursorRequest.result() ?: break
-                if (newCursor !== cursor) throw AssertionError("newCursor != cursor")
+        reinterpretExceptions {
+            val noLimit = limit <= 0
+            val store = queryable()
+            if (increasing || noLimit) {
+                val request = if (noLimit) store.getAll(range) else store.getAll(range, limit)
+                val result = request
+                    .result()
+                    .unsafeCast<Array<dynamic>>()
+                if (result.isEmpty()) return emptyList()
+                val deserializedResult = ArrayList<V>(result.size)
+                for (serialized in result) {
+                    deserializedResult.add(deserializeValue(table, serialized)!!)
+                }
+                if (!increasing) {
+                    deserializedResult.reverse()
+                }
+                return deserializedResult
+            } else {
+                // Decreasing and limited, must implement with a cursor
+                val cursorRequest = store.openCursor(range, QUERY_DIRECTION_DECREASING)
+                val cursor = cursorRequest
+                    .result()
+                    ?: return emptyList()
+                val result = ArrayList<V>()
                 result.add(deserializeValue(table, cursor.value)!!)
+                while (result.size < limit) {
+                    cursor.`continue`()
+                    val newCursor = cursorRequest
+                        .result()
+                        ?: break
+                    if (newCursor !== cursor) throw AssertionError("newCursor != cursor")
+                    result.add(deserializeValue(table, cursor.value)!!)
+                }
+                return result
             }
-            return result
         }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getAllKeys(limit: Int): List<K> {
-        val noLimit = limit <= 0
-        val store = queryable()
-        if (increasing || noLimit) {
-            val request = if (noLimit) store.getAllKeys(range) else store.getAllKeys(range, limit)
-            val result = request.result().unsafeCast<Array<dynamic>>()
-            if (result.isEmpty()) return emptyList()
-            val deserializedResult = ArrayList<K>(result.size)
-            for (serialized in result) {
-                deserializedResult.add(deserializeKeyOrIndex(table.keySerializer, serialized)!!)
-            }
-            if (!increasing) {
-                deserializedResult.reverse()
-            }
-            return deserializedResult
-        } else {
-            // Decreasing and limited, must implement with a cursor
-            val cursorRequest = store.openKeyCursor(range, QUERY_DIRECTION_DECREASING)
-            val cursor = cursorRequest.result() ?: return emptyList()
-            val result = ArrayList<K>()
-            result.add(deserializeKeyOrIndex(table.keySerializer, cursor.primaryKey)!!)
-            while (result.size < limit) {
-                cursor.`continue`()
-                val newCursor = cursorRequest.result() ?: break
-                if (newCursor !== cursor) throw AssertionError("newCursor != cursor")
+        reinterpretExceptions {
+            val noLimit = limit <= 0
+            val store = queryable()
+            if (increasing || noLimit) {
+                val request = if (noLimit) store.getAllKeys(range) else store.getAllKeys(range, limit)
+                val result = request
+                    .result()
+                    .unsafeCast<Array<dynamic>>()
+                if (result.isEmpty()) return emptyList()
+                val deserializedResult = ArrayList<K>(result.size)
+                for (serialized in result) {
+                    deserializedResult.add(deserializeKeyOrIndex(table.keySerializer, serialized)!!)
+                }
+                if (!increasing) {
+                    deserializedResult.reverse()
+                }
+                return deserializedResult
+            } else {
+                // Decreasing and limited, must implement with a cursor
+                val cursorRequest = store.openKeyCursor(range, QUERY_DIRECTION_DECREASING)
+                val cursor = cursorRequest
+                    .result()
+                    ?: return emptyList()
+                val result = ArrayList<K>()
                 result.add(deserializeKeyOrIndex(table.keySerializer, cursor.primaryKey)!!)
+                while (result.size < limit) {
+                    cursor.`continue`()
+                    val newCursor = cursorRequest
+                        .result()
+                        ?: break
+                    if (newCursor !== cursor) throw AssertionError("newCursor != cursor")
+                    result.add(deserializeKeyOrIndex(table.keySerializer, cursor.primaryKey)!!)
+                }
+                return result
             }
-            return result
         }
     }
 
     override fun <K : Any, I : Any, V : Any> Query<K, I, V>.iterateKeys(): Flow<KeyCursor<K, I>> {
         return flow {
-            val cursorRequest = queryable().openKeyCursor(range, if (increasing) QUERY_DIRECTION_INCREASING else QUERY_DIRECTION_DECREASING)
-            val cursor = cursorRequest.result() ?: return@flow // Nothing in it
-            val cur = IndexedDBKeyCursor(cursor, table.keySerializer, index?.indexSerializer)
-            emit(cur)
-            while (true) {
-                cursor.`continue`()
-                val newCursor = cursorRequest.result() ?: return@flow
-                if (newCursor !== cursor) throw AssertionError("newCursor != cursor")
+            reinterpretExceptions {
+                val cursorRequest = queryable().openKeyCursor(range, if (increasing) QUERY_DIRECTION_INCREASING else QUERY_DIRECTION_DECREASING)
+                val cursor = cursorRequest.result() ?: return@flow // Nothing in it
+                val cur = IndexedDBKeyCursor(cursor, table.keySerializer, index?.indexSerializer)
                 emit(cur)
+                while (true) {
+                    cursor.`continue`()
+                    val newCursor = cursorRequest.result() ?: return@flow
+                    if (newCursor !== cursor) throw AssertionError("newCursor != cursor")
+                    emit(cur)
+                }
             }
         }
     }
 
     internal fun <K:Any,I:Any,V:Any> Query<K, I, V>.createIterateFlow(): Flow<IndexedDBCursor<K, I, V>> {
         return flow {
-            val cursorRequest = queryable().openCursor(range, if (increasing) QUERY_DIRECTION_INCREASING else QUERY_DIRECTION_DECREASING)
-            val cursor = cursorRequest.result() ?: return@flow // Nothing in it
-            val cur = IndexedDBCursor(cursor, table, index)
-            emit(cur)
-            // The flow won't get here if the collection is cancelled
-            while (true) {
-                cursor.`continue`()
-                val newCursor = cursorRequest.result() ?: return@flow
-                if (newCursor !== cursor) throw AssertionError("newCursor != cursor")
+            reinterpretExceptions {
+                val cursorRequest = queryable().openCursor(range, if (increasing) QUERY_DIRECTION_INCREASING else QUERY_DIRECTION_DECREASING)
+                val cursor = cursorRequest.result() ?: return@flow // Nothing in it
+                val cur = IndexedDBCursor(cursor, table, index)
                 emit(cur)
+                // The flow won't get here if the collection is cancelled
+                while (true) {
+                    cursor.`continue`()
+                    val newCursor = cursorRequest.result() ?: return@flow
+                    if (newCursor !== cursor) throw AssertionError("newCursor != cursor")
+                    emit(cur)
+                }
+                // No cursor close yet: https://github.com/w3c/IndexedDB/issues/185
             }
-            // No cursor close yet: https://github.com/w3c/IndexedDB/issues/185
         }
     }
 
@@ -258,40 +330,26 @@ internal open class IndexedDBTransaction(val transaction: IDBTransaction) : Tran
 
 internal class IndexedDBWriteTransaction(transaction: IDBTransaction) : IndexedDBTransaction(transaction), WriteTransaction {
     override suspend fun Query<*, Nothing, *>.delete() {
-        val store = transaction.objectStore(table.name)
-        val request = if (range == undefined) {
-            store.clear()
-        } else {
-            store.delete(range)
+        reinterpretExceptions {
+            val store = transaction.objectStore(table.name)
+            val request = if (range == undefined) {
+                store.clear()
+            } else {
+                store.delete(range)
+            }
+            request.result()
         }
-        request.result()
     }
 
     override suspend fun <K : Any, V : Any> Table<K, V>.add(key: K, value: V) {
-        try {
+        reinterpretExceptions {
             transaction.objectStore(name).add(buildValue(key, value), buildKey(key)).result()
-        } catch (e: dynamic) {
-            val d = catchDOMException(e)
-            if (d.name == "ConstraintError") {
-                throw ConstraintException(d.message)
-            } else if (d.name == "QuotaExceededError") {
-                throw QuotaException(d.message)
-            }
-            throw e.unsafeCast<Throwable>()
         }
     }
 
     override suspend fun <K : Any, V : Any> Table<K, V>.set(key: K, value: V) {
-        try {
+        reinterpretExceptions {
             transaction.objectStore(name).put(buildValue(key, value), buildKey(key)).result()
-        } catch (e: dynamic) {
-            val d = catchDOMException(e)
-            if (d.name == "ConstraintError") {
-                throw ConstraintException(d.message)
-            } else if (d.name == "QuotaExceededError") {
-                throw QuotaException(d.message)
-            }
-            throw e.unsafeCast<Throwable>()
         }
     }
 
@@ -418,45 +476,41 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
 
     // https://w3c.github.io/IndexedDB/#opening
     val request = try {
-        factory.open(config.name, schema.version)
-    } catch (ed: dynamic) {
-        val e = catchDOMException(ed)
-        if (e.name == "SecurityError") {
+        reinterpretExceptions {
+            factory.open(config.name, schema.version)
+        }
+    } catch (e: Throwable) {
+        if (e is KDOMException && e.name == "SecurityError") {
             return OpenDBResult.StorageNotSupported
         }
-        throw RuntimeException("Failed to open IndexedDB")
+        return OpenDBResult.Failure(e)
     }
 
-    return withContext(Dispatchers.Unconfined) {
+    return coroutineScope {
         suspendCancellableCoroutine { cont ->
             request.onerror = error@{
-                val dom = asDOMException(request.error)
-                if (dom != null) {
-                    when (dom.name) {
+                val e = reinterpretException(request.error)
+                if (e is KDOMException) {
+                    when (e.name) {
                         "QuotaExceededError" -> {
                             cont.resume(OpenDBResult.OutOfMemory)
                             return@error
                         }
-
                         "VersionError" -> {
                             cont.resume(OpenDBResult.NewerVersionExists)
                             return@error
                         }
-
                         "UnknownError" -> {
                             cont.resume(OpenDBResult.UnknownError)
                             return@error
                         }
-
                         "AbortError" -> {
-                            cont.resumeWithException(CancellationException("Opening was aborted (${dom.message})"))
+                            cont.resumeWithException(CancellationException("Opening was aborted (${e.message})"))
                             return@error
                         }
                     }
-                    cont.resumeWithException(RuntimeException("Unknown error when opening DB (${dom.name}: ${dom.message})"))
-                } else {
-                    cont.resumeWithException(RuntimeException("Unknown failure to open DB", request.error))
                 }
+                cont.resumeWithException(RuntimeException("Unknown failure to open DB", e))
             }
             request.onsuccess = {
                 val db = request.result
@@ -467,6 +521,22 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                 db.addEventListener("close", {
                     idb.closed = true
                     config.onForceClose?.invoke()
+                })
+                db.addEventListener("error", {
+                    console.error("!!!! Database got unhandled error event !!!!")
+                    idb.closed = true
+                    config.onForceClose?.invoke()
+                    try {
+                        db.close()
+                    } catch (ignored: dynamic) {}
+                })
+                db.addEventListener("abort", {
+                    console.error("!!!! Database got unhandled abort event !!!!")
+                    idb.closed = true
+                    config.onForceClose?.invoke()
+                    try {
+                        db.close()
+                    } catch (ignored: dynamic) {}
                 })
                 cont.resume(OpenDBResult.Success(idb)) {
                     db.close()
@@ -479,75 +549,55 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                 launch {
                     val oldV = versionChangeEvent.oldVersion
                     val database = request.result
-                    val trans = request.transaction!!
-                    trans.onabort = {
-                        val dom = asDOMException(trans.error)
-                        if (dom != null) {
-                            cont.resumeWithException(CancellationException("Database upgrade was aborted (${dom.name}: ${dom.message})"))
-                        } else {
-                            cont.resumeWithException(CancellationException("Database upgrade was aborted", trans.error))
-                        }
-                    }
-                    trans.onerror = {
-                        val dom = asDOMException(trans.error)
-                        if (dom != null) {
-                            cont.resumeWithException(CancellationException("Database upgrade failed (${dom.name}: ${dom.message})"))
-                        } else {
-                            cont.resumeWithException(CancellationException("Database upgrade failed", trans.error))
-                        }
-                    }
-                    trans.oncomplete = {
-                        //TODO LOG
-                    }
-                    val transaction = IndexedDBWriteTransaction(trans)
+                    runTransaction(IndexedDBWriteTransaction(request.transaction!!)) {
+                        val migrateFromIndex = validSchema.indexOfFirst { it.version == oldV }
 
-                    val migrateFromIndex = validSchema.indexOfFirst { it.version == oldV }
-
-                    if (migrateFromIndex < 0) {
-                        // Create new version directly
-                        if (oldV != 0) {
-                            // Delete whole database first
-                            for (oldStore in database.objectStoreNames.toList()) {
-                                database.deleteObjectStore(oldStore)
+                        if (migrateFromIndex < 0) {
+                            // Create new version directly
+                            if (oldV != 0) {
+                                // Delete whole database first
+                                for (oldStore in database.objectStoreNames.toList()) {
+                                    database.deleteObjectStore(oldStore)
+                                }
                             }
-                        }
 
-                        for (table in schema.tables) {
-                            val store = database.createObjectStore(table.name)
-                            for (index in table.indices) {
-                                val options = js("{}")
-                                options.unique = index.unique
-                                store.createIndex(index.canonicalName, index.fieldName, options)
+                            for (table in schema.tables) {
+                                val store = database.createObjectStore(table.name)
+                                for (index in table.indices) {
+                                    val options = js("{}")
+                                    options.unique = index.unique
+                                    store.createIndex(index.canonicalName, index.fieldName, options)
+                                }
                             }
-                        }
-                        if (schema.createdNew != null) {
-                            schema.createdNew.invoke(transaction)
-                        }
-                    } else {
-                        for (nextSchemaIndex in migrateFromIndex + 1 until validSchema.size) {
-                            val currentSchema = validSchema[nextSchemaIndex - 1]
-                            val nextSchema = validSchema[nextSchemaIndex]
+                            if (schema.createdNew != null) {
+                                schema.createdNew.invoke(this@runTransaction)
+                            }
+                        } else {
+                            for (nextSchemaIndex in migrateFromIndex + 1 until validSchema.size) {
+                                val currentSchema = validSchema[nextSchemaIndex - 1]
+                                val nextSchema = validSchema[nextSchemaIndex]
 
-                            for (table in nextSchema.tables) {
-                                if (table !in currentSchema.tables) {
-                                    val store = database.createObjectStore(table.name)
-                                    for (index in table.indices) {
-                                        val options = js("{}")
-                                        options.unique = index.unique
-                                        store.createIndex(index.canonicalName, index.fieldName, options)
+                                for (table in nextSchema.tables) {
+                                    if (table !in currentSchema.tables) {
+                                        val store = database.createObjectStore(table.name)
+                                        for (index in table.indices) {
+                                            val options = js("{}")
+                                            options.unique = index.unique
+                                            store.createIndex(index.canonicalName, index.fieldName, options)
+                                        }
+                                    }
+                                }
+                                if (nextSchema.migrateFromPrevious != null) {
+                                    nextSchema.migrateFromPrevious.invoke(this@runTransaction)
+                                }
+                                for (table in currentSchema.tables) {
+                                    if (table !in nextSchema.tables) {
+                                        database.deleteObjectStore(table.name)
                                     }
                                 }
                             }
-                            if (nextSchema.migrateFromPrevious != null) {
-                                nextSchema.migrateFromPrevious.invoke(transaction)
-                            }
-                            for (table in currentSchema.tables) {
-                                if (table !in nextSchema.tables) {
-                                    database.deleteObjectStore(table.name)
-                                }
-                            }
                         }
-                    }
+                    }.getOrThrow()// Propagate into the parent scope
                 }
             }
 
@@ -558,7 +608,9 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
 }
 
 internal suspend fun deleteIndexedDBUD(config: BackendDatabaseConfig) {
-    val factory = window.indexedDB ?: return
-    factory.deleteDatabase(config.name).result()
+    reinterpretExceptions {
+        val factory = window.indexedDB ?: return
+        factory.deleteDatabase(config.name).result()
+    }
 }
 
