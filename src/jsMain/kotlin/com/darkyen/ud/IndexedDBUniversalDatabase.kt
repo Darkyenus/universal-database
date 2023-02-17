@@ -519,6 +519,7 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                 cont.resumeWithException(RuntimeException("Unknown failure to open DB", e))
             }
             request.onsuccess = {
+                console.log("DB onsuccess")
                 val db = request.result
                 val idb = IndexedDBUniversalDatabase(db)
                 db.addEventListener("versionchange", {
@@ -552,10 +553,12 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                 config.onOpeningBlocked?.invoke()
             }
             request.onupgradeneeded = { versionChangeEvent ->
+                console.log("onupgradeneeded")
                 launch {
+                    console.log("onupgradeneeded post launch")
                     val oldV = versionChangeEvent.oldVersion
                     val database = request.result
-                    runTransaction(IndexedDBWriteTransaction(request.transaction!!)) {
+                    val transactionResult = runTransaction(IndexedDBWriteTransaction(request.transaction!!)) {
                         val migrateFromIndex = validSchema.indexOfFirst { it.version == oldV }
 
                         if (migrateFromIndex < 0) {
@@ -603,7 +606,12 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                                 }
                             }
                         }
-                    }.getOrThrow()// Propagate into the parent scope
+
+                        console.log("onupgradeneeded post runTransaction")
+                    }
+                    console.log("onupgradeneeded postpost runTransaction", transactionResult)
+                    transactionResult.getOrThrow()// Propagate into the parent scope
+                    console.log("onupgradeneeded done")
                 }
             }
 
