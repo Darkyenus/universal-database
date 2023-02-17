@@ -24,7 +24,7 @@ internal inline fun <R> reinterpretExceptions(block: () -> R): R {
 internal fun reinterpretException(e: dynamic): Throwable {
     val t: Throwable = if (js("e instanceof DOMException").unsafeCast<Boolean>()) {
         if (e.name == "ConstraintError") ConstraintException(e.message.unsafeCast<String>())
-        else if (e.name == "QuotaExceededError") ConstraintException(e.message.unsafeCast<String>())
+        else if (e.name == "QuotaExceededError") QuotaException(e.message.unsafeCast<String>())
         else KDOMException(e.name.unsafeCast<String>(), e.message.unsafeCast<String>())
     } else if (js("e instanceof Error").unsafeCast<Boolean>()) {
         // https://kotlinlang.org/docs/js-to-kotlin-interop.html#primitive-arrays

@@ -512,6 +512,7 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                         }
                         "InvalidStateError" -> {
                             cont.resume(OpenDBResult.StorageNotSupported("IndexedDB InvalidStateError"))
+                            return@error
                         }
                     }
                 }
