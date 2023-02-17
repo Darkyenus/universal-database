@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.darkyen"
-version = "0.7"
+version = "debug-SNAPSHOT"
 
 repositories {
     mavenCentral()

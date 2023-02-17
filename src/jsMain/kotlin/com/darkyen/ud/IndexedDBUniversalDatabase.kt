@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlin.coroutines.*
 
-internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transaction: T, noinline block: suspend T.() -> R): Result<R> {
+internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transaction: T, upgrade:Boolean, noinline block: suspend T.() -> R): Result<R> {
     return withContext(Dispatchers.Unconfined) {
         coroutineScope {
             val trans = transaction.transaction
@@ -47,7 +47,9 @@ internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transacti
 
             // It should finish after a while
             if (!completedTooSoon) {
-                if (result.isSuccess) {
+                if (upgrade) {
+                    transactionJob.complete(true)
+                } else if (result.isSuccess) {
                     if (trans.asDynamic().commit.unsafeCast<Boolean>()) {
                         trans.commit()
                     }
@@ -93,7 +95,7 @@ internal class IndexedDBUniversalDatabase(
             val tables = Array(usedTables.size) { usedTables[it].name }
             val trans = db.transaction(tables, "readonly")
             val transaction = IndexedDBTransaction(trans)
-            runTransaction(transaction, block)
+            runTransaction(transaction, false, block)
         }
     }
 
@@ -103,7 +105,7 @@ internal class IndexedDBUniversalDatabase(
             val tables = Array(usedTables.size) { usedTables[it].name }
             val trans = db.transaction(tables, "readwrite")
             val transaction = IndexedDBWriteTransaction(trans)
-            runTransaction(transaction, block)
+            runTransaction(transaction, false, block)
         }
     }
 
@@ -553,12 +555,10 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                 config.onOpeningBlocked?.invoke()
             }
             request.onupgradeneeded = { versionChangeEvent ->
-                console.log("onupgradeneeded")
                 launch {
-                    console.log("onupgradeneeded post launch")
                     val oldV = versionChangeEvent.oldVersion
                     val database = request.result
-                    val transactionResult = runTransaction(IndexedDBWriteTransaction(request.transaction!!)) {
+                    val transactionResult = runTransaction(IndexedDBWriteTransaction(request.transaction!!), true) {
                         val migrateFromIndex = validSchema.indexOfFirst { it.version == oldV }
 
                         if (migrateFromIndex < 0) {
