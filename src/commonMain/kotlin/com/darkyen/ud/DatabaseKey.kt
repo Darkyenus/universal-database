@@ -150,3 +150,114 @@ class EnumKeySerializer<T:Enum<T>>(private val values: Array<T>) : KeySerializer
     }
 }
 
+/**
+ * Encodes strings using UTF-8 encoding that supports round trip of unpaired surrogates ("WTF-8").
+ * There are two variants, [TERMINATED] uses a null terminator and encodes 0 overlong, in two bytes,
+ * and [UNTERMINATED] which reads until the end of the key.
+ * Use the [TERMINATED] variant when compositing serializers and the [String] is not last.
+ * This encoder should maintain the binary ordering of strings (with relation to the default, locale unaware ordering).
+ * Invalid bytes in UTF-8 encoding (database corruption) are treated with an exception.
+ */
+class StringKeySerializer private constructor(private val nullTerminator: Boolean) : KeySerializer<String> {
+
+    override fun deserialize(r: ByteRead): String {
+        val sb = StringBuilder()
+
+        while (r.canRead(1)) {
+            val byte = r.readUnsignedByteOr(0)
+            when {
+                nullTerminator && byte == 0 -> break
+                byte <= 0b01111111 -> {
+                    sb.append(byte.toChar())
+                    continue
+                }
+                byte and 0b111_00000 == 0b110_00000 -> {
+                    val d1 = (byte and 0b000_11111) shl 6
+                    val d2 = r.readContinuationByteData()
+                    sb.append((d1 or d2).toChar())
+                }
+                byte and 0b1111_0000 == 0b1110_0000 -> {
+                    val d1 = (byte and 0b0000_1111) shl 12
+                    val d2 = r.readContinuationByteData() shl 6
+                    val d3 = r.readContinuationByteData()
+                    sb.append((d1 or d2 or d3).toChar())
+                }
+                byte and 0b11111_000 == 0b11110_000 -> {
+                    val d1 = (byte and 0b0000_1111) shl 18
+                    val d2 = r.readContinuationByteData() shl 12
+                    val d3 = r.readContinuationByteData() shl 6
+                    val d4 = r.readContinuationByteData()
+                    val cp = d1 or d2 or d3 or d4
+
+                    val high = (cp - 0x10000) shr 10 or 0xD800
+                    val low = (cp and 0x3FF) or 0xDC00
+                    sb.append(high.toChar())
+                    sb.append(low.toChar())
+                }
+                else -> throw IllegalArgumentException("Expected UTF-8 start byte, got $byte")
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun ByteRead.readContinuationByteData(): Int {
+        val b = readUnsignedByteOr(-1)
+        if (b and 0b11_000000 != 0b10_000000) throw IllegalArgumentException("Expected continuation character, got $b")
+        return b and 0b00_111111
+    }
+
+    private fun codePointFromSurrogate(string: String, high: Int, index: Int, endIndex: Int): Int {
+        if (high !in 0xD800..0xDBFF || index >= endIndex) {
+            return 0
+        }
+        val low = string[index].code
+        if (low !in 0xDC00..0xDFFF) {
+            return 0
+        }
+        return 0x10000 + ((high and 0x3FF) shl 10) or (low and 0x3FF)
+    }
+
+    override fun serialize(w: ByteWrite, value: String) {
+        var charIndex = 0
+        val endIndex = value.length
+
+        while (charIndex < endIndex) {
+            val code = value[charIndex++].code
+            when {
+                code < 0x80 && (code != 0 || !nullTerminator) ->
+                    w.writeByte(code.toByte())
+                code < 0x800 -> {
+                    w.writeByte(((code shr 6) or 0xC0).toByte())
+                    w.writeByte(((code and 0x3F) or 0x80).toByte())
+                }
+                code < 0xD800 || code >= 0xE000 -> {
+                    w.writeByte(((code shr 12) or 0xE0).toByte())
+                    w.writeByte((((code shr 6) and 0x3F) or 0x80).toByte())
+                    w.writeByte(((code and 0x3F) or 0x80).toByte())
+                }
+                else -> { // Surrogate char value
+                    val codePoint = codePointFromSurrogate(value, code, charIndex, endIndex)
+                    if (codePoint <= 0) {
+                        w.writeByte(((code shr 12) or 0xE0).toByte())
+                        w.writeByte((((code shr 6) and 0x3F) or 0x80).toByte())
+                        w.writeByte(((code and 0x3F) or 0x80).toByte())
+                    } else {
+                        w.writeByte(((codePoint shr 18) or 0xF0).toByte())
+                        w.writeByte((((codePoint shr 12) and 0x3F) or 0x80).toByte())
+                        w.writeByte((((codePoint shr 6) and 0x3F) or 0x80).toByte())
+                        w.writeByte(((codePoint and 0x3F) or 0x80).toByte())
+                        charIndex++
+                    }
+                }
+            }
+        }
+        if (nullTerminator) {
+            w.writeByte(0)
+        }
+    }
+
+    companion object {
+        val UNTERMINATED = StringKeySerializer(false)
+        val TERMINATED = StringKeySerializer(true)
+    }
+}

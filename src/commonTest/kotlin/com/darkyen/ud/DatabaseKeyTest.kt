@@ -101,6 +101,31 @@ class DatabaseKeyTest : FunSpec({
     test("EnumKeySerializer") {
         check(ConservationStatus.KEY_SERIALIZER, arb = Arb.of(*ConservationStatus.values()))
     }
+
+    test("BooleanKeySerializer") {
+        check(BooleanKeySerializer)
+    }
+
+    val arbAnyString = Arb.string(0, 100, Arb.codepoints()
+        .withEdgecases(Codepoint('a'.code), Codepoint(0xD800), Codepoint(0xD8DB), Codepoint(0xDFFF)))
+
+    // Comparing � with �: EDBFBF00 with EDA39B00 - expected:<0> but was:<1> WTF
+    // ED BF BF 00 - LATIN SMALL LETTER I WITH ACUTE (U+00ED), INVERTED QUESTION MARK (U+00BF), INVERTED QUESTION MARK (U+00BF)
+    // ED A3 9B 00 - LATIN SMALL LETTER I WITH ACUTE (U+00ED), POUND SIGN (U+00A3), CONTROL SEQUENCE INTRODUCER (U+009B)
+    val stringCompare: (String, String) -> Int = { a, b ->
+        // Comparison of non-ASCII is WEIRD
+        if (a.any { it.code !in 0..0x7F } || b.any { it.code !in 0..0x7F }) {
+            compare(a.encodeToByteArray(), b.encodeToByteArray())
+        } else {
+            a.compareTo(b).sign
+        }
+    }
+    test("StringKeySerializer.TERMINATED") {
+        check(StringKeySerializer.TERMINATED, arbAnyString, stringCompare)
+    }
+    test("StringKeySerializer.UNTERMINATED") {
+        check(StringKeySerializer.UNTERMINATED, arbAnyString, stringCompare)
+    }
 })
 
 @OptIn(ExperimentalKotest::class)
@@ -114,7 +139,8 @@ suspend inline fun <reified T:Comparable<T>> check(serializer: KeySerializer<T>,
             data.resetForWriting(true)
             serializer.serialize(data, a)
             val recycledA = serializer.deserialize(data)
-            withClue({"Serialized: ${data.toByteArray().toHexString()}"}) {
+            data.canRead(1) shouldBe false
+            withClue({"Serialized: ${data.toByteArray().toHexString()}, Cycled: $recycledA (${recycledA.toString().encodeToByteArray().toHexString()}), Original: $a (${a.toString().encodeToByteArray().toHexString()})"}) {
                 compare(recycledA, a) shouldBe 0
             }
         }
