@@ -79,7 +79,7 @@ class Table<Key:Any, Value:Any>(
     val name: String,
     internal val keySerializer: KeySerializer<Key>,
     internal val valueSerializer: CborSerializer<Value>,
-    internal val indices: List<Index<Key, *, Value>>
+    internal val indices: List<Index<Key, *, Value>> = emptyList()
 ) {
     init {
         validateName(name)
@@ -130,6 +130,8 @@ class Schema(
     internal val tables: List<Table<*, *>>,
     internal val migrateFromPrevious: (suspend WriteTransaction.() -> Unit)? = null,
     internal val createdNew: (suspend WriteTransaction.() -> Unit)? = null,
+    /** Called when database opening during which [migrateFromPrevious] or [createdNew] of this schema was called */
+    internal val afterSuccessfulCreationOrMigration: (() -> Unit)? = null
 )
 
 /** Describes a set of objects in a database. */

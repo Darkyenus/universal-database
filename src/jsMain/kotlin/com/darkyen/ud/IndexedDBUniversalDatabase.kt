@@ -364,8 +364,30 @@ internal class IndexedDBWriteTransaction(transaction: IDBTransaction) : IndexedD
 
 actual fun <K:Any, V:Any> Table<K, V>.queryAll(increasing: Boolean): Query<K, Nothing, V> = Query(this, null, undefined, increasing)
 actual fun <K:Any, V:Any> Table<K, V>.queryOne(value: K): Query<K, Nothing, V> = Query(this, null, IDBKeyRange.only(SerializationHelper.serialize(keySerializer, value)), true)
-actual fun <K: Any, V: Any> Table<K, V>.query(min: K?, max: K?, openMin: Boolean, openMax: Boolean, increasing: Boolean): Query<K, Nothing, V> = Query(this, null, IDBKeyRange.bound(min?.let { SerializationHelper.serialize(keySerializer, it) } ?: undefined, max?.let { SerializationHelper.serialize(keySerializer, it) } ?: undefined, openMin, openMax), increasing)
-actual fun <K: Any, I:Any, V: Any> Index<K, I, V>.query(min: I?, max: I?, openMin: Boolean, openMax: Boolean, increasing: Boolean): Query<K, I, V> = Query(table, this@query, IDBKeyRange.bound(min?.let { SerializationHelper.serialize(indexSerializer, it) } ?: undefined, max?.let { SerializationHelper.serialize(indexSerializer, it) } ?: undefined, openMin, openMax), increasing)
+
+private fun <K:Any> range(keySerializer: KeySerializer<K>, min: K?, max: K?, openMin: Boolean, openMax: Boolean): IDBKeyRange? {
+    return if (min == null) {
+        if (max == null) {
+            null
+        } else {
+            val maxS = SerializationHelper.serialize(keySerializer, max)
+            IDBKeyRange.upperBound(maxS, openMin)
+        }
+    } else if (max == null) {
+        val minS = SerializationHelper.serialize(keySerializer, min)
+        IDBKeyRange.lowerBound(minS, openMin)
+    } else {
+        val minS = SerializationHelper.serialize(keySerializer, min)
+        if (min === max) {
+            IDBKeyRange.bound(minS, minS, openMin, openMax)
+        } else {
+            val maxS = SerializationHelper.serialize(keySerializer, max)
+            IDBKeyRange.bound(minS, maxS, openMin, openMax)
+        }
+    }
+}
+actual fun <K: Any, V: Any> Table<K, V>.query(min: K?, max: K?, openMin: Boolean, openMax: Boolean, increasing: Boolean): Query<K, Nothing, V> = Query(this, null, range(keySerializer, min, max, openMin, openMax), increasing)
+actual fun <K: Any, I:Any, V: Any> Index<K, I, V>.query(min: I?, max: I?, openMin: Boolean, openMax: Boolean, increasing: Boolean): Query<K, I, V> = Query(table, this@query, range(indexSerializer, min, max, openMin, openMax), increasing)
 
 actual class Query<K: Any, I: Any, V: Any>(
     internal val table: Table<K, V>,
@@ -522,6 +544,7 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                 }
                 cont.resumeWithException(RuntimeException("Unknown failure to open DB", e))
             }
+            val postMigrationCallbacks = ArrayList<() -> Unit>()
             request.onsuccess = {
                 val db = request.result
                 val idb = IndexedDBUniversalDatabase(db)
@@ -548,8 +571,25 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                         db.close()
                     } catch (ignored: dynamic) {}
                 })
-                cont.resume(OpenDBResult.Success(idb)) {
+                var callbackError: Throwable? = null
+                for (callback in postMigrationCallbacks) {
+                    try {
+                        callback()
+                    } catch (t: Throwable) {
+                        if (callbackError == null) {
+                            callbackError = t
+                        } else {
+                            callbackError.addSuppressed(t)
+                        }
+                    }
+                }
+                if (callbackError == null) {
+                    cont.resume(OpenDBResult.Success(idb)) {
+                        db.close()
+                    }
+                } else {
                     db.close()
+                    cont.resumeWithException(callbackError)
                 }
             }
             request.onblocked = {
@@ -582,6 +622,9 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                             if (schema.createdNew != null) {
                                 schema.createdNew.invoke(this@runTransaction)
                             }
+                            if (schema.afterSuccessfulCreationOrMigration != null) {
+                                postMigrationCallbacks.add(schema.afterSuccessfulCreationOrMigration)
+                            }
                         } else {
                             for (nextSchemaIndex in migrateFromIndex + 1 until validSchema.size) {
                                 val currentSchema = validSchema[nextSchemaIndex - 1]
@@ -599,6 +642,9 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                                 }
                                 if (nextSchema.migrateFromPrevious != null) {
                                     nextSchema.migrateFromPrevious.invoke(this@runTransaction)
+                                }
+                                if (schema.afterSuccessfulCreationOrMigration != null) {
+                                    postMigrationCallbacks.add(schema.afterSuccessfulCreationOrMigration)
                                 }
                                 for (table in currentSchema.tables) {
                                     if (table !in nextSchema.tables) {
