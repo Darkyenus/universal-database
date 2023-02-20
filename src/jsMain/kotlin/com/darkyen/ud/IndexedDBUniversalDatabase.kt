@@ -7,6 +7,8 @@ import com.darkyen.ucbor.CborWrite
 import com.juul.indexeddb.external.*
 import kotlinx.browser.window
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlin.coroutines.*
@@ -92,7 +94,7 @@ internal class IndexedDBUniversalDatabase(
     internal var closed = false
 
     override suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R> {
-        if (closed) throw IllegalStateException("Database is closed")
+        if (closed) return Result.failure(IllegalStateException("Database is closed"))
         return reinterpretExceptions {
             val tables = Array(usedTables.size) { usedTables[it].name }
             val trans = db.transaction(tables, "readonly")
@@ -102,18 +104,72 @@ internal class IndexedDBUniversalDatabase(
     }
 
     override suspend fun <R> writeTransaction(vararg usedTables: Table<*, *>, block: suspend WriteTransaction.() -> R): Result<R> {
-        if (closed) throw IllegalStateException("Database is closed")
+        if (closed) return Result.failure(IllegalStateException("Database is closed"))
         return reinterpretExceptions {
             val tables = Array(usedTables.size) { usedTables[it].name }
             val trans = db.transaction(tables, "readwrite")
             val transaction = IndexedDBWriteTransaction(trans)
-            runTransaction(transaction, false, block)
+            val result = runTransaction(transaction, false, block)
+            result.onSuccess {
+                // Trigger listeners
+                val trigger = ++lastObserverTrigger
+                for (table in usedTables) {
+                    tableObservers[table]?.forEach { observer ->
+                        if (observer.lastTrigger != trigger) {
+                            observer.lastTrigger = trigger
+                            observer.trigger()
+                        }
+                    }
+
+                }
+            }
+            result
         }
     }
 
     override fun close() {
         this.closed = true
         db.close()
+    }
+
+    private class WriteObserver : DatabaseWriteObserver {
+        var lastTrigger = 0
+        val triggerChannel = Channel<Unit>(1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+        override fun checkWrite(): Boolean {
+            return triggerChannel.tryReceive().isSuccess
+        }
+
+        override suspend fun awaitWrite() {
+            triggerChannel.receive()
+        }
+
+        fun trigger() {
+            triggerChannel.trySend(Unit)
+        }
+    }
+
+    private var lastObserverTrigger = 0
+    private val tableObservers = HashMap<Table<*, *>, ArrayList<WriteObserver>>()
+
+    override fun observeDatabaseWrites(scope: CoroutineScope, vararg intoTables: Table<*, *>): DatabaseWriteObserver {
+        scope.ensureActive()
+        val observer = WriteObserver()
+
+        for (table in intoTables) {
+            val list = tableObservers.getOrPut(table, ::ArrayList)
+            list.add(observer)
+        }
+        scope.launch {
+            try {
+                awaitCancellation()
+            } finally {
+                for (table in intoTables) {
+                    tableObservers[table]?.remove(observer)
+                }
+            }
+        }
+        return observer
     }
 }
 

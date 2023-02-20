@@ -1,12 +1,66 @@
 package com.darkyen.ud
 
 import com.darkyen.ucbor.CborSerializer
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 
 interface Database {
+    /**
+     * Perform a read-transaction, which is allowed to read only [usedTables].
+     * Unlimited amount of read transactions can run in parallel.
+     * While any read transactions are running, no [writeTransaction]s can run on the same tables.
+     * Try to keep the duration of the transactions short.
+     * Some backends may not allow to perform any other suspending functions than those related to the [Transaction].
+     */
     suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R>
+
+    /**
+     * Perform a write-transaction, which is allowed to read and write only [usedTables].
+     * Only one write transaction can run on the same table at the same time
+     * (however the transaction may start with the first request, so this function does not necessarily work as a mutex).
+     * When [block] throws an exception, the transaction is rolled back.
+     * As in [transaction], try to keep the transaction as short as possible and note that non-transaction
+     * suspending functions may not be allowed in some backends.
+     *
+     * @return result from [block] or an exception (this should not throw anything)
+     * @throws IllegalStateException when the database is closed
+     */
     suspend fun <R> writeTransaction(vararg usedTables: Table<*, *>, block: suspend WriteTransaction.() -> R): Result<R>
+
+    /**
+     * Create a [DatabaseWriteObserver] that will be triggered after each successful [writeTransaction]
+     * into any of the tables in [intoTables].
+     * You can create as many observers on the same table as you want.
+     * @param scope when this scope closes, the observer will unregister itself and close other held resources. The scope must be active at the time of this call.
+     */
+    fun observeDatabaseWrites(scope: CoroutineScope, vararg intoTables: Table<*, *>): DatabaseWriteObserver
+
+    /**
+     * Close the database.
+     * Note that database can become closed even without calling this function,
+     * for example due to a hardware failure.
+     */
     fun close()
+}
+
+/**
+ * Contains a single boolean flag that indicates
+ * whether the database has been modified since the last check.
+ * Check operation atomically returns the flag value and sets it to false (no write).
+ * The flag starts in "no write" state.
+ * The API is meant to be used by a single consumer.
+ */
+interface DatabaseWriteObserver {
+    /**
+     * Check the write-flag, return its value and set it to false.
+     */
+    fun checkWrite(): Boolean
+
+    /**
+     * Check the write-flag, return if it is true and set it to false.
+     * Otherwise, suspend until the write-flag is set to true, then set it to false and return.
+     */
+    suspend fun awaitWrite()
 }
 
 open class BaseDatabaseConfig(

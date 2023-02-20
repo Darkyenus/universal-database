@@ -114,22 +114,25 @@ class DatabaseKeyTest : FunSpec({
     // ED A3 9B 00 - LATIN SMALL LETTER I WITH ACUTE (U+00ED), POUND SIGN (U+00A3), CONTROL SEQUENCE INTRODUCER (U+009B)
     val stringCompare: (String, String) -> Int = { a, b ->
         // Comparison of non-ASCII is WEIRD
-        if (a.any { it.code !in 0..0x7F } || b.any { it.code !in 0..0x7F }) {
-            compare(a.encodeToByteArray(), b.encodeToByteArray())
-        } else {
-            a.compareTo(b).sign
-        }
+        compare(a.encodeToByteArray(), b.encodeToByteArray())
     }
     test("StringKeySerializer.TERMINATED") {
-        check(StringKeySerializer.TERMINATED, arbAnyString, stringCompare)
+        check(StringKeySerializer.TERMINATED, arbAnyString, false, compare = stringCompare)
     }
     test("StringKeySerializer.UNTERMINATED") {
-        check(StringKeySerializer.UNTERMINATED, arbAnyString, stringCompare)
+        check(StringKeySerializer.UNTERMINATED, arbAnyString, false, compare = stringCompare)
+    }
+
+    test("StringKeySerializer.TERMINATED.ABC") {
+        check(StringKeySerializer.TERMINATED, testOrder = true)
+    }
+    test("StringKeySerializer.UNTERMINATED.ABC") {
+        check(StringKeySerializer.UNTERMINATED, testOrder = true)
     }
 })
 
 @OptIn(ExperimentalKotest::class)
-suspend inline fun <reified T:Comparable<T>> check(serializer: KeySerializer<T>, arb: Arb<T> = Arb.default<T>(), crossinline compare: (T, T) -> Int = { a, b -> a.compareTo(b).sign }) {
+suspend inline fun <reified T:Comparable<T>> check(serializer: KeySerializer<T>, arb: Arb<T> = Arb.default<T>(), testOrder:Boolean = true, crossinline compare: (T, T) -> Int = { a, b -> a.compareTo(b).sign }) {
     val data = ByteData()
     withClue("roundtrip") {
         proptest(
@@ -145,6 +148,8 @@ suspend inline fun <reified T:Comparable<T>> check(serializer: KeySerializer<T>,
             }
         }
     }
+
+    if (!testOrder) return
 
     withClue("ordering") {
         proptest(

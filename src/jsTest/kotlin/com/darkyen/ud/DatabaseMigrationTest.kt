@@ -5,6 +5,7 @@ import com.juul.indexeddb.external.indexedDB
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainInOrder
+import io.kotest.matchers.result.shouldBeFailure
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.browser.window
@@ -106,9 +107,7 @@ class DatabaseMigrationTest : FunSpec({
         val db = withDatabase(BackendDatabaseConfig(databaseName, schema)) {
             it
         }
-        shouldThrowAny {
-            db.transaction(birdsTable) {}
-        }
+        db.transaction(birdsTable) {}.shouldBeFailure<IllegalStateException>()
     }
 })
 

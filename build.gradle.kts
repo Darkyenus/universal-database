@@ -24,8 +24,13 @@ kotlin {
                     //useSourceMapSupport() does nothing
                     useConfigDirectory("karma-config")
 
-                    useChromiumHeadless()
-                    useFirefoxDeveloperHeadless()
+                    if (true) {
+                        useChromium()
+                        useFirefoxDeveloper()
+                    } else {
+                        useChromiumHeadless()
+                        useFirefoxDeveloperHeadless()
+                    }
                 }
             }
         }
