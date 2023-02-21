@@ -21,6 +21,18 @@ internal inline fun <R> reinterpretExceptions(block: () -> R): R {
     }
 }
 
+internal inline fun <R> reinterpretExceptions(tracer: Throwable?, block: () -> R): R {
+    try {
+        return block()
+    } catch (e: dynamic) {
+        val t = reinterpretException(e)
+        if (tracer != null) {
+            t.addSuppressed(tracer)
+        }
+        throw t
+    }
+}
+
 internal fun reinterpretException(e: dynamic): Throwable {
     val t: Throwable = if (js("e instanceof DOMException").unsafeCast<Boolean>()) {
         if (e.name == "ConstraintError") ConstraintException(e.message.unsafeCast<String>())

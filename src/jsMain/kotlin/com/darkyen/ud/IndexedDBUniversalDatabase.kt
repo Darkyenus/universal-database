@@ -87,6 +87,9 @@ internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transacti
     }
 }
 
+/** When true, transaction errors will include the original calling site of the transaction */
+var DEBUG_TRANSACTIONS = false
+
 internal class IndexedDBUniversalDatabase(
     private val db: IDBDatabase
 ) : Database {
@@ -95,7 +98,7 @@ internal class IndexedDBUniversalDatabase(
 
     override suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
-        return reinterpretExceptions {
+        return reinterpretExceptions(if (DEBUG_TRANSACTIONS) Exception("transaction started here") else null) {
             val tables = Array(usedTables.size) { usedTables[it].name }
             val trans = db.transaction(tables, "readonly")
             val transaction = IndexedDBTransaction(trans)
@@ -105,7 +108,7 @@ internal class IndexedDBUniversalDatabase(
 
     override suspend fun <R> writeTransaction(vararg usedTables: Table<*, *>, block: suspend WriteTransaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
-        return reinterpretExceptions {
+        return reinterpretExceptions(if (DEBUG_TRANSACTIONS) Exception("writeTransaction started here") else null) {
             val tables = Array(usedTables.size) { usedTables[it].name }
             val trans = db.transaction(tables, "readwrite")
             val transaction = IndexedDBWriteTransaction(trans)

@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.darkyen"
-version = "0.11"
+version = "0.12"
 
 repositories {
     mavenCentral()
