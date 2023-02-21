@@ -47,10 +47,12 @@ internal fun reinterpretException(e: dynamic): Throwable {
     } else {
         RuntimeException("Raw exception (${e}})")
     }
-    try {
-        console.log("UniversalDatabase error", e, t)
-        console.asDynamic().trace()
-    } catch (ignored: dynamic) {}
+    if (DEBUG) {
+        try {
+            console.log("UniversalDatabase error", e, t)
+            console.asDynamic().trace()
+        } catch (ignored: dynamic) {}
+    }
     return t
 }
 
