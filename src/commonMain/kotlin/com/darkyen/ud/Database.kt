@@ -38,7 +38,7 @@ interface Database {
     /**
      * Variant without [CoroutineScope] argument for short running actions. The [DatabaseWriteObserver] is valid and registered only until [block] does not end.
      */
-    suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: DatabaseWriteObserver.() -> R):R
+    suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: suspend DatabaseWriteObserver.() -> R):R
 
     /**
      * Close the database.

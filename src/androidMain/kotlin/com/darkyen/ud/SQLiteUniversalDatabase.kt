@@ -5,7 +5,6 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
 import android.database.sqlite.SQLiteOpenHelper
 import android.database.sqlite.SQLiteStatement
-import android.text.TextUtils
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -96,7 +95,7 @@ internal class SQLiteUniversalDatabase(private val dbHelper: SQLiteOpenHelper) :
         return observer
     }
 
-    override suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: DatabaseWriteObserver.() -> R):R {
+    override suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: suspend DatabaseWriteObserver.() -> R):R {
         val observer = WriteObserver()
 
         for (table in intoTables) {

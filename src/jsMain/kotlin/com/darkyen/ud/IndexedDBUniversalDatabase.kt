@@ -171,7 +171,7 @@ internal class IndexedDBUniversalDatabase(
         return observer
     }
 
-    override suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: DatabaseWriteObserver.() -> R):R {
+    override suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: suspend DatabaseWriteObserver.() -> R):R {
         val observer = WriteObserver()
 
         for (table in intoTables) {
