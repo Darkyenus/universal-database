@@ -1,12 +1,12 @@
 plugins {
     kotlin("multiplatform") version "1.7.22"
-    //id("com.android.library") version "7.3.0"
+    id("com.android.library") version "7.3.0"
     id("io.kotest.multiplatform") version "5.5.5"
     `maven-publish`
 }
 
 group = "com.darkyen"
-version = "0.13"
+version = "0.14"
 
 repositories {
     mavenCentral()
@@ -15,7 +15,7 @@ repositories {
 }
 
 kotlin {
-    //android {}
+    android {}
     js(IR) {
         browser {
             testTask {
@@ -60,28 +60,36 @@ kotlin {
                 implementation("io.kotest:kotest-property:$kotest")
             }
         }
-        //val androidMain by getting {
-        //    dependencies {
-        //        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
-        //    }
-        //}
-        //val androidTest by getting
+        val androidMain by getting {
+            dependencies {
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
+            }
+        }
+        val androidTest by getting {
+            dependencies {
+                implementation("io.kotest:kotest-runner-junit5:$kotest")
+            }
+        }
         val jsMain by getting {
             dependencies {
                 // IndexedDB external declarations
-                //implementation("com.juul.indexeddb:external:0.6.0") Use when we drop LEGACY, now it is copy-pasted
+                implementation("com.juul.indexeddb:external:0.6.0")
             }
         }
         val jsTest by getting
     }
 }
 
-/*
 android {
     namespace = "com.darkyen.ud"
     compileSdk = 33
     defaultConfig {
         minSdk = 16
     }
+
+    testOptions {
+        unitTests.all {
+            it.useJUnitPlatform()
+        }
+    }
 }
-*/

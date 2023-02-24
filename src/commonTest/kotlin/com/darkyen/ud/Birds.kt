@@ -32,7 +32,7 @@ enum class ConservationStatus {
 data class Bird(val birdlifeId:Long, val name: String, val conservationStatus: ConservationStatus, val wingspanM:Float, val massKG:Float) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
-        if (other == null || this::class.js != other::class.js) return false
+        if (other == null || this::class != other::class) return false
 
         other as Bird
 

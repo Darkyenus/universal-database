@@ -1,9 +1,5 @@
 package com.darkyen.ud
 
-import com.darkyen.ucbor.ByteData
-import com.darkyen.ucbor.CborRead
-import com.darkyen.ucbor.CborSerializer
-import com.darkyen.ucbor.CborWrite
 import com.juul.indexeddb.external.*
 import kotlinx.browser.window
 import kotlinx.coroutines.*
@@ -157,6 +153,7 @@ internal class IndexedDBUniversalDatabase(
     override fun observeDatabaseWrites(scope: CoroutineScope, vararg intoTables: Table<*, *>): DatabaseWriteObserver {
         scope.ensureActive()
         val observer = WriteObserver()
+        if (closed) return observer
 
         for (table in intoTables) {
             val list = tableObservers.getOrPut(table, ::ArrayList)
@@ -172,6 +169,22 @@ internal class IndexedDBUniversalDatabase(
             }
         }
         return observer
+    }
+
+    override suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: DatabaseWriteObserver.() -> R):R {
+        val observer = WriteObserver()
+
+        for (table in intoTables) {
+            val list = tableObservers.getOrPut(table, ::ArrayList)
+            list.add(observer)
+        }
+        try {
+            return block(observer)
+        } finally {
+            for (table in intoTables) {
+                tableObservers[table]?.remove(observer)
+            }
+        }
     }
 }
 
@@ -421,25 +434,25 @@ internal class IndexedDBWriteTransaction(transaction: IDBTransaction) : IndexedD
 }
 
 actual fun <K:Any, V:Any> Table<K, V>.queryAll(increasing: Boolean): Query<K, Nothing, V> = Query(this, null, undefined, increasing)
-actual fun <K:Any, V:Any> Table<K, V>.queryOne(value: K): Query<K, Nothing, V> = Query(this, null, IDBKeyRange.only(SerializationHelper.serialize(keySerializer, value)), true)
+actual fun <K:Any, V:Any> Table<K, V>.queryOne(value: K): Query<K, Nothing, V> = Query(this, null, IDBKeyRange.only(serialize(keySerializer, value)), true)
 
 private fun <K:Any> range(keySerializer: KeySerializer<K>, min: K?, max: K?, openMin: Boolean, openMax: Boolean): IDBKeyRange? {
     return if (min == null) {
         if (max == null) {
             null
         } else {
-            val maxS = SerializationHelper.serialize(keySerializer, max)
+            val maxS = serialize(keySerializer, max)
             IDBKeyRange.upperBound(maxS, openMin)
         }
     } else if (max == null) {
-        val minS = SerializationHelper.serialize(keySerializer, min)
+        val minS = serialize(keySerializer, min)
         IDBKeyRange.lowerBound(minS, openMin)
     } else {
-        val minS = SerializationHelper.serialize(keySerializer, min)
+        val minS = serialize(keySerializer, min)
         if (min === max) {
             IDBKeyRange.bound(minS, minS, openMin, openMax)
         } else {
-            val maxS = SerializationHelper.serialize(keySerializer, max)
+            val maxS = serialize(keySerializer, max)
             IDBKeyRange.bound(minS, maxS, openMin, openMax)
         }
     }
@@ -482,64 +495,26 @@ internal fun <V:Any> deserializeValue(table: Table<*, V>, valueObject: dynamic):
         valueObject[OBJECT_FIELD_NAME]
     }
     val data = arrayBufferToByteArray(serialized)
-    return SerializationHelper.deserialize(table.valueSerializer, data)
+    return deserialize(table.valueSerializer, data)
 }
-
-private object SerializationHelper {
-
-    /** JavaScript is single-threaded, so this is fine.
-     * Shared buffer used for de/serialization of all kinds of values. */
-    private val readByteData = ByteData()// Does not carry its own buffer
-    private val cborRead = CborRead(readByteData)
-    private val writeByteData = ByteData()// Does carry its own buffer
-    private val cborWrite = CborWrite(writeByteData)
-
-    fun <T: Any> serialize(serializer: CborSerializer<T>, value: T): ByteArray {
-        val byteData = writeByteData
-        byteData.resetForWriting(true)
-        val cborWrite = cborWrite
-        cborWrite.reset()
-        cborWrite.value(value, serializer)
-        return byteData.toByteArray()
-    }
-    fun <T: Any> serialize(serializer: KeySerializer<T>, value: T): ByteArray {
-        val byteData = writeByteData
-        byteData.resetForWriting(true)
-        serializer.serialize(byteData, value)
-        return byteData.toByteArray()
-    }
-    fun <T: Any> deserialize(serializer: CborSerializer<T>, value: ByteArray): T {
-        val byteData = readByteData
-        byteData.resetForReading(value)
-        val cborRead = cborRead
-        cborRead.reset()
-        return cborRead.value(serializer)
-    }
-    fun <T: Any> deserialize(serializer: KeySerializer<T>, value: ByteArray): T {
-        val byteData = readByteData
-        byteData.resetForReading(value)
-        return serializer.deserialize(byteData)
-    }
-}
-
 
 internal fun <KI: Any> deserializeKeyOrIndex(serializer: KeySerializer<KI>, keyIndexObject: dynamic): KI? {
     if (keyIndexObject == null) return null
     val data = arrayBufferToByteArray(keyIndexObject)
-    return SerializationHelper.deserialize(serializer, data)
+    return deserialize(serializer, data)
 }
 
 internal fun <K:Any> Table<K, *>.buildKey(key: K): dynamic {
-    return SerializationHelper.serialize(keySerializer, key)
+    return serialize(keySerializer, key)
 }
 
 internal fun <K: Any, I: Any, V: Any> Index<K, I, V>.buildIndex(key: K, value: V): dynamic {
     val index = indexExtractor(key, value)
-    return SerializationHelper.serialize(indexSerializer, index)
+    return serialize(indexSerializer, index)
 }
 
 internal fun <K:Any, V:Any> Table<K, V>.buildValue(key:K, value: V): dynamic {
-    val serialized = SerializationHelper.serialize(valueSerializer, value)
+    val serialized = serialize(valueSerializer, value)
     return if (indices.isEmpty()) {
         serialized
     } else {
@@ -654,7 +629,7 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                 config.onOpeningBlocked?.invoke()
             }
             request.onupgradeneeded = { versionChangeEvent ->
-                launch {
+                launch(start = CoroutineStart.UNDISPATCHED) {
                     val oldV = versionChangeEvent.oldVersion
                     val database = request.result
                     runTransaction(IndexedDBWriteTransaction(request.transaction!!), true) {
