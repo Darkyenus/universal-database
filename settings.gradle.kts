@@ -1,5 +1,5 @@
 
-rootProject.name = "universal-database"
+rootProject.name = "lkmp-database"
 
 pluginManagement {
     repositories {

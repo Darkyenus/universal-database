@@ -1,4 +1,4 @@
-package com.darkyen.ud
+package com.darkyen.database
 
 import com.darkyen.ucbor.CborReadSingle
 import com.darkyen.ucbor.CborSerializer

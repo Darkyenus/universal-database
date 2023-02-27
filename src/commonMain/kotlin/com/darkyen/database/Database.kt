@@ -1,4 +1,4 @@
-package com.darkyen.ud
+package com.darkyen.database
 
 import com.darkyen.ucbor.CborSerializer
 import kotlinx.coroutines.CoroutineScope

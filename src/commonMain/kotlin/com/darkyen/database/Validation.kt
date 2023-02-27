@@ -1,4 +1,4 @@
-package com.darkyen.ud
+package com.darkyen.database
 
 internal fun validateName(name: String) {
     if (name.length !in 1..100) throw IllegalArgumentException("name has unreasonable length")

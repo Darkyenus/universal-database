@@ -1,4 +1,4 @@
-package com.darkyen.ud
+package com.darkyen.database
 
 /** Convert [Double] to [Float]. Same as [Double.toFloat] but actually works in JS backend.
  * See https://youtrack.jetbrains.com/issue/KT-24975/Enforce-range-of-Float-type-in-JS

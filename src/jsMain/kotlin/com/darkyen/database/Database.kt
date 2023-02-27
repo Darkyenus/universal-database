@@ -1,4 +1,4 @@
-package com.darkyen.ud
+package com.darkyen.database
 
 actual class BackendDatabaseConfig(
     name: String,

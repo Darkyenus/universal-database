@@ -1,4 +1,4 @@
-package com.darkyen.ud
+package com.darkyen.database
 
 import com.darkyen.ucbor.ByteRead
 import com.darkyen.ucbor.ByteWrite

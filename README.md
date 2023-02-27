@@ -1,3 +1,7 @@
+# Light Kotlin Multiplatform Database
+Supported platforms:
+- JavaScript through IndexedDB
+
 ### Running tests
 
 This command ensures that everything works, all caching and daemons are disabled.

@@ -1,6 +1,6 @@
 @file:Suppress("NOTHING_TO_INLINE")
 
-package com.darkyen.ud
+package com.darkyen.database
 
 import com.darkyen.ucbor.CborSerializer
 

@@ -49,7 +49,7 @@ kotlin {
                 api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
 
                 // CBOR
-                api("com.darkyen.ultralight-cbor:ultralight-cbor:0.3")
+                api("com.darkyen.lkmp-cbor:lkmp-cbor:0.3")
             }
         }
         val commonTest by getting {
@@ -81,7 +81,7 @@ kotlin {
 }
 
 android {
-    namespace = "com.darkyen.ud"
+    namespace = "com.darkyen.database"
     compileSdk = 33
     defaultConfig {
         minSdk = 16

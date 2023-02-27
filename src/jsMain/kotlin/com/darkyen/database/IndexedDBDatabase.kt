@@ -1,4 +1,4 @@
-package com.darkyen.ud
+package com.darkyen.database
 
 import com.juul.indexeddb.external.*
 import kotlinx.browser.window

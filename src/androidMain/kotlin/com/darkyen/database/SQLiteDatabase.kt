@@ -1,4 +1,4 @@
-package com.darkyen.ud
+package com.darkyen.database
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase

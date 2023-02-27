@@ -1,4 +1,4 @@
-package com.darkyen.ud
+package com.darkyen.database
 
 import com.darkyen.ucbor.CborSerializers
 import io.kotest.assertions.fail
@@ -10,7 +10,6 @@ import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.result.shouldBeFailure
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldContainIgnoringCase
 import io.kotest.matchers.throwable.shouldHaveMessage
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.mpp.timeInMillis

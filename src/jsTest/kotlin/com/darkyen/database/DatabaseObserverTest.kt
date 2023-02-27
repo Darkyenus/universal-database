@@ -1,4 +1,4 @@
-package com.darkyen.ud
+package com.darkyen.database
 
 import com.darkyen.ucbor.CborSerializers
 import io.kotest.core.spec.style.FunSpec
