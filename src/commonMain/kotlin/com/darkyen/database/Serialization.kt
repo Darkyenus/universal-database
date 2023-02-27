@@ -1,9 +1,9 @@
 package com.darkyen.database
 
-import com.darkyen.ucbor.ByteData
-import com.darkyen.ucbor.CborRead
-import com.darkyen.ucbor.CborSerializer
-import com.darkyen.ucbor.CborWrite
+import com.darkyen.cbor.ByteData
+import com.darkyen.cbor.CborRead
+import com.darkyen.cbor.CborSerializer
+import com.darkyen.cbor.CborWrite
 
 /** Thread-unsafe class that holds pre-allocated object which help with de/serialization of objects. */
 internal class SerializationHelper {

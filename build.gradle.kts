@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.darkyen"
-version = "0.15"
+version = "1.0"
 
 repositories {
     mavenCentral()
@@ -49,7 +49,7 @@ kotlin {
                 api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
 
                 // CBOR
-                api("com.darkyen.lkmp-cbor:lkmp-cbor:0.3")
+                api("com.darkyen.lkmp-cbor:lkmp-cbor:1.0")
             }
         }
         val commonTest by getting {

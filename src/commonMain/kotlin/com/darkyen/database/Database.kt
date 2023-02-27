@@ -1,6 +1,6 @@
 package com.darkyen.database
 
-import com.darkyen.ucbor.CborSerializer
+import com.darkyen.cbor.CborSerializer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 

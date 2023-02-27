@@ -1,11 +1,11 @@
 package com.darkyen.database
 
-import com.darkyen.ucbor.ByteRead
-import com.darkyen.ucbor.ByteWrite
-import com.darkyen.ucbor.doubleToFloat
+import com.darkyen.cbor.ByteRead
+import com.darkyen.cbor.ByteWrite
+import com.darkyen.cbor.doubleToFloat
 
 /**
- * CBOR serialization provided by [com.darkyen.ucbor.CborSerializer] can turn, in principle,
+ * CBOR serialization provided by [com.darkyen.cbor.CborSerializer] can turn, in principle,
  * any object into a binary string. Binary strings can be compared, however the ordering of such
  * serialized objects is different from the ordering of the original objects.
  * Serialization that is stable in regard to ordering must be implemented more carefully

@@ -1,6 +1,6 @@
 package com.darkyen.database
 
-import com.darkyen.ucbor.CborSerializers
+import com.darkyen.cbor.CborSerializers
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue

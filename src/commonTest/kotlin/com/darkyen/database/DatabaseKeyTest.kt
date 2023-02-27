@@ -1,7 +1,7 @@
 package com.darkyen.database
 
-import com.darkyen.ucbor.ByteData
-import com.darkyen.ucbor.toHexString
+import com.darkyen.cbor.ByteData
+import com.darkyen.cbor.toHexString
 import io.kotest.assertions.withClue
 import io.kotest.common.ExperimentalKotest
 import io.kotest.core.spec.style.FunSpec

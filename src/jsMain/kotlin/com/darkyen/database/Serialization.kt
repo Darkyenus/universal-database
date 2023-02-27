@@ -2,7 +2,7 @@
 
 package com.darkyen.database
 
-import com.darkyen.ucbor.CborSerializer
+import com.darkyen.cbor.CborSerializer
 
 /** JS has no threads, so this is safe */
 internal val serializationHelper = SerializationHelper()

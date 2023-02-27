@@ -2,7 +2,7 @@
 
 package com.darkyen.database
 
-import com.darkyen.ucbor.CborSerializer
+import com.darkyen.cbor.CborSerializer
 import java.util.concurrent.atomic.AtomicReference
 
 private val serializationHelperRef = AtomicReference(SerializationHelper())

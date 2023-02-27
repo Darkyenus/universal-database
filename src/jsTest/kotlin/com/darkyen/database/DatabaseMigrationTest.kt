@@ -1,6 +1,6 @@
 package com.darkyen.database
 
-import com.darkyen.ucbor.CborSerializers
+import com.darkyen.cbor.CborSerializers
 import com.juul.indexeddb.external.indexedDB
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
