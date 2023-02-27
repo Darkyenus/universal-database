@@ -1,4 +1,6 @@
 # Light Kotlin Multiplatform Database
+[![](https://jitpack.io/v/com.darkyen/lkmp-database.svg)](https://jitpack.io/#com.darkyen/lkmp-database)
+
 Supported platforms:
 - JavaScript through IndexedDB
 
