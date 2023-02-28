@@ -1,14 +1,15 @@
 package com.darkyen.database
 
 import android.content.Context
-import android.database.sqlite.SQLiteDatabase
+import io.requery.android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
-import android.database.sqlite.SQLiteOpenHelper
-import android.database.sqlite.SQLiteStatement
+import io.requery.android.database.sqlite.SQLiteOpenHelper
+import io.requery.android.database.sqlite.SQLiteStatement
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import java.io.File
 
 internal class SQLiteUniversalDatabase(private val dbHelper: SQLiteOpenHelper) : Database {
@@ -127,97 +128,247 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
         if (this !in tables) throw IllegalArgumentException("Can't query table $this, transaction uses only tables ${tables.contentToString()}")
     }
 
+    private inline fun <R> withStatement(buildSql: StringBuilder.() -> Unit, block: (SQLiteStatement) -> R): R {
+        val sql = StringBuilder()
+        sql.buildSql()
+        return db.compileStatement(sql.toString()).use(block)
+    }
+
     override suspend fun Query<*, Nothing, *>.delete() {
         checkTables()
-        val stat = db.compileStatement(buildString {
-            append("DELETE FROM ").append(table.name).append(' ')
-            this@delete.appendWhere(this)
-        })
-        this@delete.bindWhereParams(stat)
+        withStatement({
+            append("DELETE FROM ").append(table.name)
+            appendWhere(this)
+        }) { stat ->
+            bindWhereParams(stat)
+            stat.executeUpdateDelete()
+        }
+    }
 
-        stat.executeUpdateDelete()
-        stat.close()
+    private fun <K : Any, V : Any, I:Any> serializeIndex(key: K, value: V, index: Index<K, I, V>): ByteArray {
+        return serialize(index.indexSerializer, index.indexExtractor(key, value))
     }
 
     override suspend fun <K : Any, V : Any> Table<K, V>.add(key: K, value: V) {
         checkTables()
-        TODO("Not yet implemented")
+        withStatement({
+            append("INSERT OR ABORT INTO ").append(name).append(" ($KEY_COLUMN_NAME, $VALUE_COLUMN_NAME")
+            for (index in this@add.indices) {
+                append(", ").append(index.fieldName)
+            }
+            append(") VALUES (?1, ?2")
+            for (i in this@add.indices.indices) {
+                append(", ?").append(3 + i)
+            }
+            append(")")
+        }) { stat ->
+            stat.bindBlob(1, serialize(keySerializer, key))
+            stat.bindBlob(2, serialize(valueSerializer, value))
+            for ((i, index) in this@add.indices.withIndex()) {
+                stat.bindBlob(3 + i, serializeIndex(key, value, index))
+            }
+            stat.executeInsert()
+        }
     }
 
     override suspend fun <K : Any, V : Any> Table<K, V>.set(key: K, value: V) {
         checkTables()
-        TODO("Not yet implemented")
-    }
-
-    override fun <K : Any, I : Any, V : Any> Query<K, I, V>.writeIterate(): Flow<MutableCursor<K, I, V>> {
-        checkTables()
-        TODO("Not yet implemented")
+        withStatement({
+            append("INSERT INTO ").append(name).append(" ($KEY_COLUMN_NAME, $VALUE_COLUMN_NAME")
+            for (index in this@set.indices) {
+                append(", ").append(index.fieldName)
+            }
+            append(") VALUES (?1, ?2")
+            for (i in this@set.indices.indices) {
+                append(", ?").append(3 + i)
+            }
+            append(") ON CONFLICT ($KEY_COLUMN_NAME) DO UPDATE SET $VALUE_COLUMN_NAME = ?2")
+            for ((i, index) in this@set.indices.withIndex()) {
+                append(", ").append(index.fieldName).append(" = ").append("?").append(3 + i)
+            }
+        }) { stat ->
+            stat.bindBlob(1, serialize(keySerializer, key))
+            stat.bindBlob(2, serialize(valueSerializer, value))
+            for ((i, index) in this@set.indices.withIndex()) {
+                stat.bindBlob(3 + i, serializeIndex(key, value, index))
+            }
+            stat.executeInsert()
+        }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.count(): Int {
         checkTables()
-
-        val stat = db.compileStatement(buildString {
+        return withStatement({
             append("SELECT COUNT(*) FROM ").append(table.name)
             appendWhere(this)
-        })
-        bindWhereParams(stat)
-
-        val result = stat.simpleQueryForLong()
-        stat.close()
-        return result.toInt()
+        }) { stat ->
+            bindWhereParams(stat)
+            stat.simpleQueryForLong().toInt()
+        }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getFirst(): V? {
         checkTables()
-        val stat = db.compileStatement(buildString {
+        val sql = buildString {
             append("SELECT $VALUE_COLUMN_NAME FROM ").append(table.name)
             appendWhere(this)
             appendOrder(this)
             append(" LIMIT 1")
-        })
-        bindWhereParams(stat)
-
-        TODO("Not yet implemented")
+        }
+        return db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
+            if (cursor.moveToFirst()) {
+                deserialize(table.valueSerializer, cursor.getBlob(0))
+            } else null
+        }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getFirstKey(): K? {
         checkTables()
-        TODO("Not yet implemented")
+        val sql = buildString {
+            append("SELECT $KEY_COLUMN_NAME FROM ").append(table.name)
+            appendWhere(this)
+            appendOrder(this)
+            append(" LIMIT 1")
+        }
+        return db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
+            if (cursor.moveToFirst()) {
+                deserialize(table.keySerializer, cursor.getBlob(0))
+            } else null
+        }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getAll(limit: Int): List<V> {
         checkTables()
-        TODO("Not yet implemented")
+        val sql = buildString {
+            append("SELECT $VALUE_COLUMN_NAME FROM ").append(table.name)
+            appendWhere(this)
+            appendOrder(this)
+        }
+        return db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
+            if (!cursor.moveToFirst()) return@use emptyList()
+            val result = ArrayList<V>()
+            do {
+                result.add(deserialize(table.valueSerializer, cursor.getBlob(0)))
+            } while (cursor.moveToNext())
+            result
+        }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getAllKeys(limit: Int): List<K> {
         checkTables()
-        TODO("Not yet implemented")
+        val sql = buildString {
+            append("SELECT $KEY_COLUMN_NAME FROM ").append(table.name)
+            appendWhere(this)
+            appendOrder(this)
+        }
+        return db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
+            if (!cursor.moveToFirst()) return@use emptyList()
+            val result = ArrayList<K>()
+            do {
+                result.add(deserialize(table.keySerializer, cursor.getBlob(0)))
+            } while (cursor.moveToNext())
+            result
+        }
     }
 
     override fun <K : Any, I : Any, V : Any> Query<K, I, V>.iterateKeys(): Flow<KeyCursor<K, I>> {
         checkTables()
-        TODO("Not yet implemented")
+        return flow {
+            val sql = buildString {
+                append("SELECT $KEY_COLUMN_NAME")
+                if (index != null) append(", ").append(index.fieldName)
+                append(" FROM ").append(table.name)
+                appendWhere(this)
+                appendOrder(this)
+            }
+            db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
+                if (!cursor.moveToFirst()) return@use
+                val outCursor = object : KeyCursor<K, I> {
+                    override val key: K
+                        get() = deserialize(table.keySerializer, cursor.getBlob(0))
+                    override val indexKey: I
+                        get() = if (index != null) deserialize(index.indexSerializer, cursor.getBlob(1)) else throw NoSuchElementException("The cursor has no index")
+                }
+                do {
+                    emit(outCursor)
+                } while (cursor.moveToNext())
+            }
+        }
     }
 
     override fun <K : Any, I : Any, V : Any> Query<K, I, V>.iterate(): Flow<Cursor<K, I, V>> {
         checkTables()
-        TODO("Not yet implemented")
+        return flow {
+            val sql = buildString {
+                append("SELECT $KEY_COLUMN_NAME, $VALUE_COLUMN_NAME")
+                if (index != null) append(", ").append(index.fieldName)
+                append(" FROM ").append(table.name)
+                appendWhere(this)
+                appendOrder(this)
+            }
+            db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
+                if (!cursor.moveToFirst()) return@use
+                val outCursor = object : Cursor<K, I, V> {
+                    override val key: K
+                        get() = deserialize(table.keySerializer, cursor.getBlob(0))
+                    override val value: V
+                        get() = deserialize(table.valueSerializer, cursor.getBlob(1))
+                    override val indexKey: I
+                        get() = if (index != null) deserialize(index.indexSerializer, cursor.getBlob(1)) else throw NoSuchElementException("The cursor has no index")
+                }
+                do {
+                    emit(outCursor)
+                } while (cursor.moveToNext())
+            }
+        }
+    }
+
+    override fun <K : Any, I : Any, V : Any> Query<K, I, V>.writeIterate(): Flow<MutableCursor<K, I, V>> {
+        checkTables()
+        return flow {
+            val sql = buildString {
+                append("SELECT $KEY_COLUMN_NAME, $VALUE_COLUMN_NAME")
+                if (index != null) append(", ").append(index.fieldName)
+                append(" FROM ").append(table.name)
+                appendWhere(this)
+                appendOrder(this)
+            }
+            db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
+                if (!cursor.moveToFirst()) return@use
+                val outCursor = object : MutableCursor<K, I, V> {
+                    override val key: K
+                        get() = deserialize(table.keySerializer, cursor.getBlob(0))
+                    override val value: V
+                        get() = deserialize(table.valueSerializer, cursor.getBlob(1))
+                    override val indexKey: I
+                        get() = if (index != null) deserialize(index.indexSerializer, cursor.getBlob(1)) else throw NoSuchElementException("The cursor has no index")
+
+                    override suspend fun update(newValue: V) {
+                       table.set(key, newValue)
+                    }
+                    override suspend fun delete() {
+                        table.queryOne(key).delete()
+                    }
+                }
+                do {
+                    emit(outCursor)
+                } while (cursor.moveToNext())
+            }
+        }
     }
 }
 
 actual class Query<K : Any, I : Any, V : Any> internal constructor(
     internal val table: Table<K, V>,
     internal val index: Index<K, I, V>?,
-    internal val minBound: ByteArray?,
-    internal val minBoundOpen: Boolean,
-    internal val maxBound: ByteArray?,
-    internal val maxBoundOpen: Boolean,
-    internal val increasing: Boolean,
+    private val minBound: ByteArray?,
+    private val minBoundOpen: Boolean,
+    private val maxBound: ByteArray?,
+    private val maxBoundOpen: Boolean,
+    private val increasing: Boolean,
 ) {
 
-    val whereField: String
+    private val whereField: String
         get() = index?.fieldName ?: KEY_COLUMN_NAME
 
     fun appendWhere(sql: StringBuilder) {
@@ -234,7 +385,7 @@ actual class Query<K : Any, I : Any, V : Any> internal constructor(
             } else {
                 sql.append(" >= ")
             }
-            sql.append("?1")
+            sql.append("?")
 
             if (maxBound != null) {
                 sql.append(" AND ")
@@ -248,7 +399,7 @@ actual class Query<K : Any, I : Any, V : Any> internal constructor(
             } else {
                 sql.append(" <= ")
             }
-            sql.append("?2")
+            sql.append("?")
         }
     }
 
@@ -262,12 +413,22 @@ actual class Query<K : Any, I : Any, V : Any> internal constructor(
     }
 
     fun bindWhereParams(stat: SQLiteStatement) {
+        var nextIndex = 1
         if (minBound != null) {
-            stat.bindBlob(1, minBound)
+            stat.bindBlob(nextIndex++, minBound)
         }
         if (maxBound != null) {
-            stat.bindBlob(2, maxBound)
+            stat.bindBlob(nextIndex, maxBound)
         }
+    }
+
+    fun bindWhereParamsToArray(): Array<Any> {
+        val min = minBound
+        val max = maxBound
+        if (min != null && max != null) return arrayOf(min, max)
+        if (min != null) return arrayOf(min)
+        if (max != null) return arrayOf(max)
+        return emptyArray()
     }
 }
 

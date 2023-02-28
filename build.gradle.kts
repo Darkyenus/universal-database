@@ -63,6 +63,8 @@ kotlin {
         val androidMain by getting {
             dependencies {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
+                implementation("com.github.requery:sqlite-android:3.39.2")
+                implementation("androidx.sqlite:sqlite:2.2.0")// Do not update until Requery does
             }
         }
         val androidTest by getting {
