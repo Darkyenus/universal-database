@@ -13,13 +13,11 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.throwable.shouldHaveMessage
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.mpp.timeInMillis
-import kotlinx.browser.window
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
-import kotlin.js.Promise
 import kotlin.random.Random
 
 class DatabaseTest : FunSpec({
@@ -37,13 +35,8 @@ class DatabaseTest : FunSpec({
     val sightingTable = Table("Sightings", LongKeySerializer, BIRD_SIGHTING_SERIALIZER, emptyList())
 
     val schema = Schema(1, listOf(birdTable, sightingTable))
-    val config = BackendDatabaseConfig("Birds", schema)
 
-    afterEach {
-        deleteUniversalDatabase(config)
-    }
-
-    test("suspend functions are banned") {
+    databaseTest("suspend functions are banned", schema) { config ->
         withDatabase(config) { db ->
             withClue("delay") {
                 db.transaction(birdTable) {
@@ -60,7 +53,7 @@ class DatabaseTest : FunSpec({
                 db.transaction(birdTable) {
                     birdTable.queryAll().count() shouldBe 0
 
-                    window.fetch("/the-url-does-not-matter-suspend-does").await()
+                    doSomethingSuspending(0)
                 }.shouldBeFailure { err ->
                     err.shouldBeInstanceOf<IllegalStateException>()
                     err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
@@ -83,11 +76,7 @@ class DatabaseTest : FunSpec({
                     }
 
                     // Didn't reliably fail without this, not sure if that was supposed to happen or not
-                    suspendCoroutine { cont ->
-                        window.setTimeout({
-                            cont.resume(Unit)
-                        }, 10)
-                    }
+                    doSomethingSuspending(1)
                 }.shouldBeFailure { err ->
                     err.shouldBeInstanceOf<IllegalStateException>()
                     err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
@@ -96,7 +85,7 @@ class DatabaseTest : FunSpec({
         }
     }
 
-    test("single") {
+    databaseTest("single", schema) { config ->
         withDatabase(config) { db ->
             val bird = birds[3]
             val sighting = BirdSighting(bird.birdlifeId, timeInMillis(), 0.9)
@@ -242,7 +231,7 @@ class DatabaseTest : FunSpec({
         }
     }
 
-    test("all") {
+    databaseTest("all", schema) { config ->
         withDatabase(config) { db ->
             withClue("insert all") {
                 db.writeTransaction(birdTable, sightingTable) {
@@ -315,7 +304,7 @@ class DatabaseTest : FunSpec({
         }
     }
 
-    test("rollback add and set") {
+    databaseTest("rollback add and set", schema) { config ->
         withDatabase(config) { db ->
             db.writeTransaction(birdTable) {
                 birdTable.add(5, birds[0])
@@ -331,7 +320,7 @@ class DatabaseTest : FunSpec({
         }
     }
 
-    test("cursor update and delete") {
+    databaseTest("cursor update and delete", schema) { config ->
         withDatabase(config) { db ->
             db.writeTransaction(birdTable) {
                 birdTable.add(5, birds[0])
@@ -361,7 +350,7 @@ class DatabaseTest : FunSpec({
         }
     }
 
-    test("rollback cursor update") {
+    databaseTest("rollback cursor update", schema) { config ->
         withDatabase(config) { db ->
             db.writeTransaction(birdTable) {
                 birdTable.add(5, birds[0])
@@ -388,7 +377,7 @@ class DatabaseTest : FunSpec({
         }
     }
 
-    test("read transactions are parallel") {
+    databaseTest("read transactions are parallel", schema) { config ->
         withDatabase(config) { db ->
             coroutineScope {
                 val tickets = mutableListOf("a", "b", "c", "a", "c", "b", "a", "b", "c")
@@ -414,7 +403,7 @@ class DatabaseTest : FunSpec({
         }
     }
 
-    test("write transactions are exclusive") {
+    databaseTest("write transactions are exclusive", schema) { config ->
         withDatabase(config) { db ->
             coroutineScope {
                 var activeTransaction = "none"
@@ -448,12 +437,10 @@ class DatabaseTest : FunSpec({
 
     // Test is disabled for now, because the test browsers have insanely large quotas by default and it does not work
     // I have tried to set the quotas manually in karma-config, but to no avail
-    xtest("handle quotas") {
-        val dataTable = Table("Data", IntKeySerializer, CborSerializers.BlobSerializer, emptyList())
-        val blockConfig = BackendDatabaseConfig(config.name, Schema(1, listOf(dataTable)))
-
-        val estimate = window.navigator.asDynamic().storage.estimate().unsafeCast<Promise<dynamic>>().await()
-        if (true) throw RuntimeException("Estimate: ${JSON.stringify(estimate)}")
+    val dataTable = Table("Data", IntKeySerializer, CborSerializers.BlobSerializer, emptyList())
+    databaseTest("!handle quotas", Schema(1, listOf(dataTable))) { blockConfig ->
+        //val estimate = window.navigator.asDynamic().storage.estimate().unsafeCast<Promise<dynamic>>().await()
+        //if (true) throw RuntimeException("Estimate: ${JSON.stringify(estimate)}")
 
         withDatabase(blockConfig) { db ->
             // Attempt to insert infinite data to hit quota

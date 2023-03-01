@@ -11,13 +11,8 @@ class DatabaseObserverTest: FunSpec({
     val TableThing1 = Table("Thing1", LongKeySerializer, CborSerializers.StringSerializer, emptyList())
     val TableThing2 = Table("Thing2", LongKeySerializer, CborSerializers.StringSerializer, emptyList())
     val schema = Schema(1, listOf(TableThing1, TableThing2))
-    val config = BackendDatabaseConfig("ThingDB", schema)
 
-    afterEach {
-        deleteUniversalDatabase(config)
-    }
-
-    test("f:Observer") {
+    databaseTest("Observer", schema) { config ->
         withDatabase(config) { db ->
             coroutineScope {
                 val observe12 = db.observeDatabaseWrites(this, TableThing1, TableThing2)
