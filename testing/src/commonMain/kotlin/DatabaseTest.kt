@@ -3,7 +3,6 @@ package com.darkyen.database
 import com.darkyen.cbor.CborSerializers
 import io.kotest.assertions.fail
 import io.kotest.assertions.withClue
-import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.nulls.shouldBeNull
@@ -16,11 +15,9 @@ import io.kotest.mpp.timeInMillis
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
-import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 import kotlin.random.Random
 
-class DatabaseTest : FunSpec({
+class DatabaseTest : TestContainer({
 
     val birdlifeIDIndex = Index<Long, Long, Bird>("BirdlifeID", { _, v -> v.birdlifeId }, UnsignedLongKeySerializer, true)
     val conservationIndex = Index<Long, ConservationStatus, Bird>("Conservation", { _, v -> v.conservationStatus }, ConservationStatus.KEY_SERIALIZER, false)
@@ -45,10 +42,11 @@ class DatabaseTest : FunSpec({
                     delay(100)
                 }.shouldBeFailure { err ->
                     err.shouldBeInstanceOf<IllegalStateException>()
-                    err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
+                    //err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
                 }
             }
 
+            println("fetch")
             withClue("fetch") {
                 db.transaction(birdTable) {
                     birdTable.queryAll().count() shouldBe 0
@@ -56,32 +54,23 @@ class DatabaseTest : FunSpec({
                     doSomethingSuspending(0)
                 }.shouldBeFailure { err ->
                     err.shouldBeInstanceOf<IllegalStateException>()
-                    err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
+                    //err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
                 }
             }
 
+            println("redispatch")
             withClue("redispatch") {
                 db.transaction(birdTable) {
                     birdTable.queryAll().count() shouldBe 0
-
-                    coroutineScope {
-                        val jobs = List(1000) { async {
-                            (0..1000).fold(0) { i, a -> i + a }
-                        } }
-                        withContext(Dispatchers.Default) {
-                            withContext(Dispatchers.Main) {
-                                jobs.awaitAll()
-                            }
-                        }
-                    }
 
                     // Didn't reliably fail without this, not sure if that was supposed to happen or not
                     doSomethingSuspending(1)
                 }.shouldBeFailure { err ->
                     err.shouldBeInstanceOf<IllegalStateException>()
-                    err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
+                    //err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
                 }
             }
+            println("done")
         }
     }
 

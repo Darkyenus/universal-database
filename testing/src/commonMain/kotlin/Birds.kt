@@ -4,6 +4,7 @@ import com.darkyen.cbor.CborReadSingle
 import com.darkyen.cbor.CborSerializer
 import com.darkyen.cbor.CborSerializers
 import com.darkyen.cbor.CborWrite
+import com.darkyen.database.EnumKeySerializer
 import kotlin.random.Random
 
 // Testing bird dataset

@@ -4,7 +4,8 @@ import kotlinx.coroutines.CancellationException
 import org.khronos.webgl.ArrayBuffer
 import org.khronos.webgl.Int8Array
 
-internal fun <T> Result<T>.addSuppressed(t: Throwable): Result<T> {
+internal fun <T> Result<T>.addSuppressed(t: Throwable?): Result<T> {
+    if (t == null) return this
     return this.fold({ Result.failure(t) }, { e ->
         e.addSuppressed(t)
         Result.failure(e)
@@ -37,6 +38,7 @@ internal fun reinterpretException(e: dynamic): Throwable {
     val t: Throwable = if (js("e instanceof DOMException").unsafeCast<Boolean>()) {
         if (e.name == "ConstraintError") ConstraintException(e.message.unsafeCast<String>())
         else if (e.name == "QuotaExceededError") QuotaException(e.message.unsafeCast<String>())
+        else if (e.name == "InvalidStateError") IllegalStateException("InvalidStateError: "+e.message.unsafeCast<String>())
         else KDOMException(e.name.unsafeCast<String>(), e.message.unsafeCast<String>())
     } else if (js("e instanceof Error").unsafeCast<Boolean>()) {
         // https://kotlinlang.org/docs/js-to-kotlin-interop.html#primitive-arrays

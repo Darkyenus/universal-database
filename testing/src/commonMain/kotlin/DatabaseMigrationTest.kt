@@ -1,8 +1,8 @@
 package com.darkyen.database
 
 import com.darkyen.cbor.CborSerializers
+import com.darkyen.database.*
 import io.kotest.assertions.throwables.shouldThrowAny
-import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainInOrder
 import io.kotest.matchers.result.shouldBeFailure
 import io.kotest.matchers.result.shouldBeSuccess
@@ -10,13 +10,14 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 
 
 @Suppress("unused")
-class DatabaseMigrationTest : FunSpec({
+class DatabaseMigrationTest : TestContainer({
 
     databaseTest("database opening simple", Schema(
         1, listOf(
             Table("birds", LongKeySerializer, CborSerializers.StringSerializer, emptyList())
         )
-    )) { config ->
+    )
+    ) { config ->
         withDatabase(config) {
             // Good
         }
@@ -33,7 +34,8 @@ class DatabaseMigrationTest : FunSpec({
         1, listOf(
             birdsTable
         )
-    )) { config ->
+    )
+    ) { config ->
 
         for (bird in simpleBirds) {
             withDatabase(config) { db ->

@@ -2,9 +2,9 @@ package com.darkyen.database
 
 import com.darkyen.cbor.ByteData
 import com.darkyen.cbor.toHexString
+import com.darkyen.database.*
 import io.kotest.assertions.withClue
 import io.kotest.common.ExperimentalKotest
-import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.property.Arb
 import io.kotest.property.PropTestConfig
@@ -14,7 +14,7 @@ import io.kotest.property.resolution.default
 import kotlin.math.min
 import kotlin.math.sign
 
-class DatabaseKeyTest : FunSpec({
+class DatabaseKeyTest : TestContainer({
     test("IntKeySerializer") {
         check(IntKeySerializer)
     }
@@ -30,7 +30,8 @@ class DatabaseKeyTest : FunSpec({
     }
 
     test("FloatKeySerializer") {
-        check<Float>(FloatKeySerializer, arbitrary(listOf(
+        check<Float>(
+            FloatKeySerializer, arbitrary(listOf(
             Float.MAX_VALUE, Float.MIN_VALUE, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY, Float.NaN, Float.fromBits(0x003FFFFF), Float.fromBits(0x803FFFFF.toInt()), -1f, 1f, 0f, -0f,
             ).map { doubleToFloat(it.toDouble()) }, FloatShrinker) {
             doubleToFloat(Float.fromBits(it.random.nextInt()).toDouble())
@@ -64,7 +65,8 @@ class DatabaseKeyTest : FunSpec({
         }
     }
     test("DoubleKeySerializer") {
-        check(DoubleKeySerializer, arbitrary(listOf(
+        check(
+            DoubleKeySerializer, arbitrary(listOf(
             Double.MAX_VALUE, Double.MIN_VALUE, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, Double.NaN, Double.fromBits(0x0007FFFFFFFF3FFF), Double.fromBits(0x0007FFFFFFFFFFFF or (1L shl 63)), -1.0, 1.0, 0.0, -0.0,
         ), DoubleShrinker) {
             Double.fromBits(it.random.nextLong())
@@ -116,17 +118,17 @@ class DatabaseKeyTest : FunSpec({
         // Comparison of non-ASCII is WEIRD
         compare(a.encodeToByteArray(), b.encodeToByteArray())
     }
-    test("StringKeySerializer.TERMINATED") {
+    test("StringKeySerializer TERMINATED") {
         check(StringKeySerializer.TERMINATED, arbAnyString, false, compare = stringCompare)
     }
-    test("StringKeySerializer.UNTERMINATED") {
+    test("StringKeySerializer UNTERMINATED") {
         check(StringKeySerializer.UNTERMINATED, arbAnyString, false, compare = stringCompare)
     }
 
-    test("StringKeySerializer.TERMINATED.ABC") {
+    test("StringKeySerializer TERMINATED ABC") {
         check(StringKeySerializer.TERMINATED, testOrder = true)
     }
-    test("StringKeySerializer.UNTERMINATED.ABC") {
+    test("StringKeySerializer UNTERMINATED ABC") {
         check(StringKeySerializer.UNTERMINATED, testOrder = true)
     }
 })

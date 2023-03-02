@@ -1,6 +1,8 @@
 
 rootProject.name = "lkmp-database"
 
+include(":testing")
+
 pluginManagement {
     repositories {
         mavenCentral()
