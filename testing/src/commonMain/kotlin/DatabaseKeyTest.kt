@@ -3,7 +3,6 @@ package com.darkyen.database
 import com.darkyen.cbor.ByteData
 import com.darkyen.cbor.toHexString
 import com.darkyen.database.*
-import io.kotest.assertions.withClue
 import io.kotest.common.ExperimentalKotest
 import io.kotest.matchers.shouldBe
 import io.kotest.property.Arb

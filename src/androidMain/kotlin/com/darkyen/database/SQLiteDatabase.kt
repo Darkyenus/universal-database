@@ -12,13 +12,17 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import java.io.File
 
-internal class SQLiteUniversalDatabase(private val dbHelper: SQLiteOpenHelper) : Database {
+internal class SQLiteUniversalDatabase(
+    private val schema: Schema,
+    private val dbHelper: SQLiteOpenHelper
+    ) : Database {
     private var closed = false
-    private val dispatcher = ThreadStableDispatcher(2)
+    private val dispatcher = newSingleThreadContext("db")//ThreadStableDispatcher(2)
     private val mutex = ReadWriteMutex()
 
     override suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
+        if (usedTables.any { it !in schema.tables }) throw IllegalArgumentException("Transaction must use tables in schema")
         return runCatching {
             mutex.read {
                 withContext(dispatcher + ThreadStableToken()) {
@@ -32,6 +36,7 @@ internal class SQLiteUniversalDatabase(private val dbHelper: SQLiteOpenHelper) :
 
     override suspend fun <R> writeTransaction(vararg usedTables: Table<*, *>, block: suspend WriteTransaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
+        if (usedTables.any { it !in schema.tables }) throw IllegalArgumentException("Transaction must use tables in schema")
         return runCatching {
             mutex.write {
                 withContext(dispatcher + ThreadStableToken()) {
@@ -243,6 +248,7 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
             append("SELECT $VALUE_COLUMN_NAME FROM ").append(table.name)
             appendWhere(this)
             appendOrder(this)
+            appendLimit(this, limit)
         }
         return db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
             if (!cursor.moveToFirst()) return@use emptyList()
@@ -260,6 +266,7 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
             append("SELECT $KEY_COLUMN_NAME FROM ").append(table.name)
             appendWhere(this)
             appendOrder(this)
+            appendLimit(this, limit)
         }
         return db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
             if (!cursor.moveToFirst()) return@use emptyList()
@@ -412,6 +419,12 @@ actual class Query<K : Any, I : Any, V : Any> internal constructor(
         }
     }
 
+    fun appendLimit(sql: StringBuilder, limit: Int) {
+        if (limit > 0) {
+            sql.append(" LIMIT ").append(limit)
+        }
+    }
+
     fun bindWhereParams(stat: SQLiteStatement) {
         var nextIndex = 1
         if (minBound != null) {
@@ -467,27 +480,19 @@ actual suspend fun openUniversalDatabase(config: BackendDatabaseConfig): OpenDBR
 
         private fun createTableAndIndices(db: SQLiteDatabase, table: Table<*, *>) {
             db.execSQL(buildString {
-                append("CREATE TABLE ? (? BLOB PRIMARY KEY NOT NULL, ? BLOB NOT NULL")
+                append("CREATE TABLE ").append(table.name).append(" ($KEY_COLUMN_NAME BLOB PRIMARY KEY NOT NULL, $VALUE_COLUMN_NAME BLOB NOT NULL")
                 for (index in table.indices) {
-                    append(", ? BLOB NOT NULL")
+                    append(", ").append(index.fieldName).append(" BLOB NOT NULL")
                 }
                 append(")")
-            }, Array(3 + table.indices.size) {
-                when (it) {
-                    0 -> table.name
-                    1 -> KEY_COLUMN_NAME
-                    2 -> VALUE_COLUMN_NAME
-                    else -> table.indices[it-3].fieldName
-                }
             })
             for (index in table.indices) {
-                db.execSQL(if (index.unique) "CREATE UNIQUE INDEX ? ON ? (?)" else "CREATE INDEX ? ON ? (?)", arrayOf(index.canonicalName, table.name, index.fieldName))
+                db.execSQL("CREATE${if (index.unique) " UNIQUE" else ""} INDEX ${index.canonicalName} ON ${table.name} (${index.fieldName})")
             }
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
             val migrateFromIndex = config.schema.indexOfFirst { it.version == oldVersion }
-            val transaction = SQLiteTransaction(db, schema.tables.toTypedArray())
 
             if (migrateFromIndex < 0) {
                 // Create new version directly
@@ -510,7 +515,7 @@ actual suspend fun openUniversalDatabase(config: BackendDatabaseConfig): OpenDBR
                 }
                 if (schema.createdNew != null) {
                     runBlocking {
-                        schema.createdNew.invoke(transaction)
+                        schema.createdNew.invoke(SQLiteTransaction(db, schema.tables.toTypedArray()))
                     }
                 }
                 if (schema.afterSuccessfulCreationOrMigration != null) {
@@ -528,11 +533,11 @@ actual suspend fun openUniversalDatabase(config: BackendDatabaseConfig): OpenDBR
                     }
                     if (nextSchema.migrateFromPrevious != null) {
                         runBlocking {
-                            nextSchema.migrateFromPrevious.invoke(transaction)
+                            nextSchema.migrateFromPrevious.invoke(SQLiteTransaction(db, (currentSchema.tables + nextSchema.tables).toTypedArray()))
                         }
                     }
-                    if (schema.afterSuccessfulCreationOrMigration != null) {
-                        postMigrationCallbacks.add(schema.afterSuccessfulCreationOrMigration)
+                    if (nextSchema.afterSuccessfulCreationOrMigration != null) {
+                        postMigrationCallbacks.add(nextSchema.afterSuccessfulCreationOrMigration)
                     }
                     for (table in currentSchema.tables) {
                         if (table !in nextSchema.tables) {
@@ -577,7 +582,7 @@ actual suspend fun openUniversalDatabase(config: BackendDatabaseConfig): OpenDBR
         return OpenDBResult.Failure(e)
     }
 
-    return OpenDBResult.Success(SQLiteUniversalDatabase(openHelper))
+    return OpenDBResult.Success(SQLiteUniversalDatabase(schema, openHelper))
 }
 
 /** Performs [block] in an exclusive transaction. Rolls back on any exception. */

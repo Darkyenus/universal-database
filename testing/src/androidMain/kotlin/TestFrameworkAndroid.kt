@@ -1,15 +1,7 @@
 package com.darkyen.database
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.content.Context
-import android.os.Bundle
-import android.view.ViewGroup
-import android.webkit.WebView
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.concurrent.thread
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -49,22 +41,3 @@ actual fun doubleToFloat(v: Double): Float {
 actual object RootTestContainer : TestContainer({
     include(CommonTests)
 })
-
-class TestRunnerActivity : Activity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        val webView = WebView(this)
-        webView.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        setContentView(webView)
-        webView.loadData("<html><body>Running tests</body></html>", "text/html", "UTF-8")
-
-        GlobalScope.launch {
-            RootTestContainer.runAndRenderTests().collect { html ->
-                withContext(Dispatchers.Main) {
-                    webView.loadData("<html><body>$html</body></html>", "text/html", "UTF-8")
-                }
-            }
-        }
-    }
-}

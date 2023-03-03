@@ -700,8 +700,8 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
                                 if (nextSchema.migrateFromPrevious != null) {
                                     nextSchema.migrateFromPrevious.invoke(this@runTransaction)
                                 }
-                                if (schema.afterSuccessfulCreationOrMigration != null) {
-                                    postMigrationCallbacks.add(schema.afterSuccessfulCreationOrMigration)
+                                if (nextSchema.afterSuccessfulCreationOrMigration != null) {
+                                    postMigrationCallbacks.add(nextSchema.afterSuccessfulCreationOrMigration)
                                 }
                                 for (table in currentSchema.tables) {
                                     if (table !in nextSchema.tables) {

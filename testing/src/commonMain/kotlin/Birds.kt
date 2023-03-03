@@ -53,7 +53,7 @@ data class Bird(val birdlifeId:Long, val name: String, val conservationStatus: C
     }
 
     override fun toString(): String {
-        return "Bird($birdlifeId, $name, $conservationStatus, $wingspanM (${wingspanM.toRawBits().toString(16)}, $massKG (${massKG.toRawBits().toString(16)}))"
+        return "Bird($birdlifeId, $name, $conservationStatus, $wingspanM (${wingspanM.toRawBits().toString(16)}), $massKG (${massKG.toRawBits().toString(16)}))"
     }
 }
 

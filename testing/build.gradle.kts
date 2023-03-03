@@ -36,7 +36,7 @@ kotlin {
         }
     }
 
-    val kotest = "5.5.5"
+    val kotest = "5.5.4"// 5.5.5 is busted https://github.com/kotest/kotest/issues/3407
     
     sourceSets {
         all {
@@ -57,14 +57,29 @@ kotlin {
 }
 
 android {
-    namespace = "com.darkyen.database"
+    namespace = "com.darkyen.database.testing"
     compileSdk = 33
+
     defaultConfig {
+        targetSdk = 33
         minSdk = 16
+
+        versionName = "1"
+        versionCode = 1
     }
+    sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_9
         targetCompatibility = JavaVersion.VERSION_1_9
+    }
+
+    buildTypes {
+        all {
+            isEmbedMicroApp = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            isDebuggable = true
+        }
     }
 }
 
@@ -135,7 +150,7 @@ fun collectBrowsers(): List<suspend (File) -> Unit> {
     throw NotImplementedError("No collectBrowsers for OS ${System.getProperty("os.name")}")
 }
 
-tasks.register("runTests") {
+tasks.register("runTestsWeb") {
     outputs.upToDateWhen { false }// Do not cache tests
 
     val webpack = tasks["jsBrowserDevelopmentWebpack"] as org.jetbrains.kotlin.gradle.targets.js.webpack.KotlinWebpack
@@ -151,3 +166,29 @@ tasks.register("runTests") {
     }
 }
 
+tasks.register("runTestsAndroid") {
+    outputs.upToDateWhen { false }// Do not cache tests
+
+    val assembly = tasks["packageDebug"]
+    dependsOn(assembly)
+
+    doLast {
+        val apk = assembly.outputs.files.files.flatMap { it.listFiles()?.toList() ?: emptyList() }.single { it.isFile && it.extension == "apk" }
+
+        try {
+            exec {
+                commandLine("adb", "uninstall", android.namespace)
+            }
+        } catch (ignore: Throwable) {}
+
+        exec {
+            commandLine("adb", "install", "-t", "-g", "--user", "0", apk.absolutePath)
+        }
+        if (false) {
+            exec {
+                commandLine("adb", "shell", "am", "start", "-W", "--user", "0", "-n", android.namespace + "/.TestRunnerActivity")
+            }
+        }
+    }
+
+}

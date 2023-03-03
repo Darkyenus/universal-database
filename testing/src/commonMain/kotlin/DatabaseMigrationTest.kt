@@ -6,7 +6,6 @@ import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.matchers.collections.shouldContainInOrder
 import io.kotest.matchers.result.shouldBeFailure
 import io.kotest.matchers.result.shouldBeSuccess
-import io.kotest.matchers.types.shouldBeInstanceOf
 
 
 @Suppress("unused")
@@ -95,11 +94,3 @@ class DatabaseMigrationTest : TestContainer({
     }
 })
 
-suspend inline fun <T> withDatabase(config: BackendDatabaseConfig, block: (Database) -> T):T {
-    val result = openUniversalDatabase(config)
-    result.shouldBeInstanceOf<OpenDBResult.Success>()
-    val db = result.db
-    val res = block(db)
-    db.close()
-    return res
-}

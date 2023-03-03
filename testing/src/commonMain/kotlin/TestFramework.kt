@@ -1,5 +1,6 @@
 package com.darkyen.database
 
+import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -96,7 +97,7 @@ abstract class TestContainer {
                     }
                 } catch (e: Throwable) {
                     entry.failException = e
-                    println("     Failure")
+                    println("     Failure: ${e.stackTraceToString()}")
                     e.printStackTrace()
                     entry.status = TestResultEntry.Status.Failed
                 }
@@ -107,7 +108,7 @@ abstract class TestContainer {
 
     suspend fun runAndRenderTests(): Flow<String> {
         return try {
-            runTests().conflate().map { it.renderHTMLTable() }
+            runTests().map { it.renderHTMLTable() }
         } catch (e: Throwable) {
             flowOf(e.stackTraceToString())
         }
@@ -162,6 +163,73 @@ inline fun TestContainer.databaseTest(
 }
 
 expect fun TestContainer.databaseTest(name: String, schema: List<Schema>, test: suspend (List<BackendDatabaseConfig>) -> Unit)
+
+suspend inline fun <T> withDatabase(config: BackendDatabaseConfig, block: (Database) -> T):T {
+    val result = openUniversalDatabase(config)
+    result.shouldBeInstanceOf<OpenDBResult.Success>()
+    val db = result.db
+    try {
+        return block(db)
+    } finally {
+        db.close()
+    }
+}
+
+class ClueThrowable : Throwable(null, null) {
+    private val clues = ArrayList<String>()
+    fun addClue(clue: String) {
+        clues.add(clue)
+    }
+
+    override val message: String
+        get() {
+            return "Clue: "+clues.joinToString(" - ")
+        }
+}
+
+fun Throwable.findClue(): ClueThrowable? {
+    var t = this
+    while (true) {
+        for (se in suppressedExceptions) {
+            if (se is ClueThrowable) {
+                return se
+            } else {
+                se.findClue()?.let { return it }
+            }
+        }
+        t = t.cause ?: break
+    }
+    return null
+}
+
+fun Throwable.addClue(clue: Any) {
+    val clueThrowable = findClue() ?: run {
+        val c = ClueThrowable()
+        addSuppressed(c)
+        c
+    }
+    val str = clue.toString()
+    println("CLUE: $str")
+    clueThrowable.addClue(str)
+}
+
+inline fun <R> withClue(clue: Any, block: () -> R):R {
+    try {
+        return block()
+    } catch (e: Throwable) {
+        e.addClue(clue.toString())
+        throw e
+    }
+}
+
+inline fun <R> withClue(clue: () -> Any, block: () -> R):R {
+    try {
+        return block()
+    } catch (e: Throwable) {
+        e.addClue(clue().toString())
+        throw e
+    }
+}
 
 expect suspend fun doSomethingSuspending(kind: Int)
 
