@@ -1,8 +1,12 @@
 package com.darkyen.database
 
+import io.kotest.common.measureTimeMillisCompat
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.DurationUnit
+import kotlin.time.ExperimentalTime
+import kotlin.time.measureTime
 
 /**
  * Holds all tests
@@ -51,6 +55,7 @@ abstract class TestContainer {
         addTest(name, body)
     }
 
+    @OptIn(ExperimentalTime::class)
     suspend fun runTests(): Flow<List<TestResultEntry>> {
         val tests = tests?.sortedBy {
             it.name
@@ -85,8 +90,10 @@ abstract class TestContainer {
                 emit(result)
 
                 try {
-                    val timeout = withTimeoutOrNull(20_000) {
-                        entry.function()
+                    val timeout = withTimeoutOrNull(120_000) {
+                        entry.durationMs = measureTime {
+                            entry.function()
+                        }.inWholeMilliseconds
                     }
                     if (timeout == null) {
                         entry.status = TestResultEntry.Status.TimedOut
@@ -117,6 +124,7 @@ abstract class TestContainer {
 
 class TestResultEntry(val name: String, val function: suspend () -> Unit) {
     var status: Status = Status.Waiting
+    var durationMs: Long = 0
     var failException: Throwable? = null
 
     enum class Status {
@@ -172,6 +180,18 @@ suspend inline fun <T> withDatabase(config: BackendDatabaseConfig, block: (Datab
         return block(db)
     } finally {
         db.close()
+    }
+}
+
+@OptIn(ExperimentalTime::class)
+inline fun benchmark(name: String, amount: Int = 0, block: (amount: Int) -> Unit) {
+    val duration = measureTime {
+        block(amount)
+    }
+    if (amount > 0) {
+        println("BENCHMARK $name: ${duration.inWholeMilliseconds} ms (${duration.toDouble(DurationUnit.MILLISECONDS) / amount} ms/op)")
+    } else {
+        println("BENCHMARK $name: ${duration.inWholeMilliseconds} ms")
     }
 }
 

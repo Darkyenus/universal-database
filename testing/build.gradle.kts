@@ -161,7 +161,8 @@ tasks.register("runTestsWeb") {
         val htmlFile = jsFile.resolveSibling("index.html")
         htmlFile.writeText("<!DOCTYPE html><html><head><title>lkmp-database testing</title><script defer src=\"testing.js\"></script></head><body>Not loaded</body></html>")
         runBlocking {
-            collectBrowsers().map { runBrowser -> async { runBrowser(htmlFile) } }.awaitAll()
+            //collectBrowsers().map { runBrowser -> async { runBrowser(htmlFile) } }.awaitAll()
+            collectBrowsers().map { runBrowser -> runBrowser(htmlFile) }
         }
     }
 }

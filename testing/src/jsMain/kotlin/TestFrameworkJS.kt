@@ -93,6 +93,7 @@ actual fun doubleToFloat(v: Double): Float {
 
 actual object RootTestContainer : TestContainer({
     include(CommonTests)
+    include(JSDatabaseTest)
 })
 
 @OptIn(DelicateCoroutinesApi::class)

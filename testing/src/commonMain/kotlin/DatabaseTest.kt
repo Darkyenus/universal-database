@@ -2,15 +2,12 @@ package com.darkyen.database
 
 import com.darkyen.cbor.CborSerializers
 import io.kotest.assertions.fail
-import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.result.shouldBeFailure
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.mpp.timeInMillis
-import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlin.random.Random
@@ -30,47 +27,6 @@ class DatabaseTest : TestContainer({
     val sightingTable = Table("Sightings", LongKeySerializer, BIRD_SIGHTING_SERIALIZER, emptyList())
 
     val schema = Schema(1, listOf(birdTable, sightingTable))
-
-    databaseTest("suspend functions are banned", schema) { config ->
-        withDatabase(config) { db ->
-            withClue("delay") {
-                db.transaction(birdTable) {
-                    birdTable.queryAll().count() shouldBe 0
-
-                    delay(100)
-                }.shouldBeFailure { err ->
-                    err.shouldBeInstanceOf<IllegalStateException>()
-                    //err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
-                }
-            }
-
-            println("fetch")
-            withClue("fetch") {
-                db.transaction(birdTable) {
-                    birdTable.queryAll().count() shouldBe 0
-
-                    doSomethingSuspending(0)
-                }.shouldBeFailure { err ->
-                    err.shouldBeInstanceOf<IllegalStateException>()
-                    //err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
-                }
-            }
-
-            println("redispatch")
-            withClue("redispatch") {
-                db.transaction(birdTable) {
-                    birdTable.queryAll().count() shouldBe 0
-
-                    // Didn't reliably fail without this, not sure if that was supposed to happen or not
-                    doSomethingSuspending(1)
-                }.shouldBeFailure { err ->
-                    err.shouldBeInstanceOf<IllegalStateException>()
-                    //err.shouldHaveMessage("Transaction completed before block, this indicates incorrect use of suspend functions")
-                }
-            }
-            println("done")
-        }
-    }
 
     databaseTest("single", schema) { config ->
         withDatabase(config) { db ->
@@ -361,64 +317,6 @@ class DatabaseTest : TestContainer({
                 birdTable.queryOne(5).getFirst() shouldBe birds[0]
                 birdTable.queryAll().count() shouldBe 1
             }.shouldBeSuccess()
-        }
-    }
-
-    databaseTest("read transactions are parallel", schema) { config ->
-        withDatabase(config) { db ->
-            coroutineScope {
-                val tickets = mutableListOf("a", "b", "c", "a", "c", "b", "a", "b", "c")
-                val jobs = listOf("a", "b", "c").map { jobName ->
-                    launch {
-                        db.transaction(birdTable) {
-                            while (tickets.isNotEmpty()) {
-                                if (tickets.last() == jobName) {
-                                    tickets.removeLast()
-                                } else {
-                                    // Must delay, but we are in a transaction, only suspend functions allowed are DB, so do something, just to yield
-                                    birdTable.queryAll().count() shouldBe 0
-                                }
-                            }
-                        }.shouldBeSuccess()
-                    }
-                }
-                withTimeout(1000) {
-                    jobs.joinAll()
-                }
-                tickets.shouldBeEmpty()
-            }
-        }
-    }
-
-    databaseTest("write transactions are exclusive", schema) { config ->
-        withDatabase(config) { db ->
-            coroutineScope {
-                var activeTransaction = "none"
-                val jobs = listOf("a", "b", "c").map { jobName ->
-                    launch {
-                        db.writeTransaction(birdTable) {
-                            // The exclusivity starts at first suspension point
-                            birdTable.queryAll().count() shouldBe 0
-
-                            activeTransaction shouldBe "none"
-                            activeTransaction = jobName
-
-                            // Must delay, but we are in a transaction, only suspend functions allowed are DB, so do something, just to yield
-                            for (i in 0 until Random.nextInt(1, 100)) {
-                                birdTable.queryAll().count() shouldBe 0
-                            }
-
-                            activeTransaction shouldBe jobName
-                            activeTransaction = "none"
-                        }.shouldBeSuccess()
-                    }
-                }
-                withTimeout(1000) {
-                    jobs.joinAll()
-                }
-
-                activeTransaction shouldBe "none"
-            }
         }
     }
 

@@ -5,4 +5,5 @@ object CommonTests : TestContainer({
     include(DatabaseMigrationTest())
     include(DatabaseTest())
     include(DatabaseObserverTest())
+    include(BenchmarkTest)
 })

@@ -1,6 +1,7 @@
 package com.darkyen.database
 
 import android.content.Context
+import android.database.sqlite.SQLiteConstraintException
 import io.requery.android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
 import io.requery.android.database.sqlite.SQLiteOpenHelper
@@ -16,16 +17,18 @@ internal class SQLiteUniversalDatabase(
     private val schema: Schema,
     private val dbHelper: SQLiteOpenHelper
     ) : Database {
+
     private var closed = false
-    private val dispatcher = newSingleThreadContext("db")//ThreadStableDispatcher(2)
+    @OptIn(DelicateCoroutinesApi::class)
+    private val writeDispatcher = newSingleThreadContext(dbHelper.databaseName ?: "DB Executor")
     private val mutex = ReadWriteMutex()
 
     override suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
         if (usedTables.any { it !in schema.tables }) throw IllegalArgumentException("Transaction must use tables in schema")
         return runCatching {
-            mutex.read {
-                withContext(dispatcher + ThreadStableToken()) {
+            withContext(Dispatchers.IO/* there is no transaction, dispatches can run on any thread */) {
+                mutex.read {
                     val db = dbHelper.readableDatabase
                     // Readable, no transaction necessary
                     block(SQLiteTransaction(db, usedTables))
@@ -38,8 +41,8 @@ internal class SQLiteUniversalDatabase(
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
         if (usedTables.any { it !in schema.tables }) throw IllegalArgumentException("Transaction must use tables in schema")
         return runCatching {
-            mutex.write {
-                withContext(dispatcher + ThreadStableToken()) {
+            withContext(writeDispatcher/* since there is a transaction, the dispatcher must have a stable thread */) {
+                mutex.write {
                     val db = dbHelper.writableDatabase
                     db.sqlTransaction {
                         block(SQLiteTransaction(db, usedTables))
@@ -120,7 +123,7 @@ internal class SQLiteUniversalDatabase(
     override fun close() {
         closed = true
         dbHelper.close()
-        dispatcher.close()
+        writeDispatcher.close()
     }
 }
 
@@ -136,7 +139,11 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
     private inline fun <R> withStatement(buildSql: StringBuilder.() -> Unit, block: (SQLiteStatement) -> R): R {
         val sql = StringBuilder()
         sql.buildSql()
-        return db.compileStatement(sql.toString()).use(block)
+        try {
+            return db.compileStatement(sql.toString()).use(block)
+        } catch (e: SQLiteConstraintException) {
+            throw ConstraintException(e)
+        }
     }
 
     override suspend fun Query<*, Nothing, *>.delete() {

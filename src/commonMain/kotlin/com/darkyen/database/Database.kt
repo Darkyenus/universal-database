@@ -82,7 +82,11 @@ open class BaseDatabaseConfig(
 }
 
 /** Thrown when attempting to put data into the database that would create duplicates where duplicates are not allowed. */
-class ConstraintException(message: String) : RuntimeException(message)
+class ConstraintException : RuntimeException {
+    constructor(message: String) : super(message)
+    constructor(message: String, cause: Throwable) : super(message, cause)
+    constructor(cause: Throwable) : super(cause)
+}
 /** Thrown when the storage is full and will not take any more data */
 class QuotaException(message: String) : RuntimeException(message)
 

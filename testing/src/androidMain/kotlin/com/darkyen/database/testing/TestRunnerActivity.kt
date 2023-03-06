@@ -3,6 +3,8 @@ package com.darkyen.database.testing
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.os.Bundle
+import android.text.Layout.Alignment
+import android.view.View
 import android.view.ViewGroup
 import android.widget.*
 import com.darkyen.database.RootTestContainer
@@ -23,8 +25,8 @@ class TestRunnerActivity : Activity() {
         super.onCreate(savedInstanceState)
 
         val table = TableLayout(this)
-        table.setColumnShrinkable(0, true)
-        table.setColumnShrinkable(1, true)
+        table.setColumnStretchable(0, true)
+        table.setColumnStretchable(1, true)
         val scroll = ScrollView(this)
         scroll.addView(table)
         scroll.isFillViewport = true
@@ -34,8 +36,15 @@ class TestRunnerActivity : Activity() {
         this.table = table
         table.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         table.addView(TableRow(this).apply {
-            addView(TextView(context).apply { text = "Test Name" })
-            addView(TextView(context).apply { text = "Test Result" })
+            layoutParams = TableLayout.LayoutParams(0, TableRow.LayoutParams.WRAP_CONTENT)
+            addView(TextView(context).apply {
+                layoutParams = TableRow.LayoutParams(0, TableRow.LayoutParams.WRAP_CONTENT, 1f)
+                text = "Test Name"
+            })
+            addView(TextView(context).apply {
+                layoutParams = TableRow.LayoutParams(0, TableRow.LayoutParams.WRAP_CONTENT, 1f)
+                text = "Test Result"
+            })
         })
 
         setContentView(scroll)
@@ -51,8 +60,13 @@ class TestRunnerActivity : Activity() {
                 for ((i, entry) in result.withIndex()) {
                     val row = table.getChildAt(i+1) as TableRow? ?: run {
                         val row = TableRow(this@TestRunnerActivity).apply {
-                            addView(TextView(context).apply { text = entry.name })
+                            layoutParams = TableLayout.LayoutParams(0, TableRow.LayoutParams.WRAP_CONTENT)
                             addView(TextView(context).apply {
+                                layoutParams = TableRow.LayoutParams(0, TableRow.LayoutParams.WRAP_CONTENT, 1f)
+                                text = entry.name
+                            })
+                            addView(TextView(context).apply {
+                                layoutParams = TableRow.LayoutParams(0, TableRow.LayoutParams.WRAP_CONTENT, 1f)
                                 isSingleLine = false
                             })
                         }

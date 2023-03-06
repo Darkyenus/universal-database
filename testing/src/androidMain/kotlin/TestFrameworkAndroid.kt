@@ -40,4 +40,5 @@ actual fun doubleToFloat(v: Double): Float {
 
 actual object RootTestContainer : TestContainer({
     include(CommonTests)
+    include(AndroidDatabaseTest)
 })
