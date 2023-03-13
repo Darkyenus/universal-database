@@ -17,6 +17,17 @@ object BenchmarkTest : TestContainer ({
             withDatabase(config) { db ->
                 val id = (0 until amount).shuffled()
 
+                benchmark("insert-one-transaction", id.size) {
+                    db.writeTransaction(birdTable) {
+                        for (t in id) {
+                            birdTable.add(t.toLong(), birds.random())
+                        }
+                    }.getOrThrow()
+                }
+                db.writeTransaction(birdTable) {
+                    birdTable.queryAll().delete()
+                }
+
                 benchmark("insert", id.size) {
                     for (t in id) {
                         db.writeTransaction(birdTable) {

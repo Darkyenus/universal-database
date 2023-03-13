@@ -17,17 +17,15 @@ internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transacti
             val transactionJob = CompletableDeferred<Boolean/*Completed*/>(parentJob)
 
             trans.oncomplete = {
-                console.warn("oncomplete")
                 transactionJob.complete(true)
             }
             trans.onabort = {
-                console.warn("onabort")
                 it.preventDefault()
                 it.stopPropagation()
                 transactionJob.complete(false)
             }
             trans.onerror = {
-                console.info("!!!! Uncaught error in transaction !!!!")
+                console.warn("!!!! Uncaught error in transaction !!!!")
                 it.preventDefault()
                 it.stopPropagation()
                 trans.abort()
@@ -38,7 +36,6 @@ internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transacti
                 val result = transaction.block()
                 Result.success(result)
             } catch (e: dynamic) {
-                console.warn("error in block")
                 Result.failure(reinterpretException(e))
             }
 
@@ -48,15 +45,12 @@ internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transacti
 
             // It should finish after a while
             if (!completedTooSoon) {
-                console.warn("not completed too soon")
                 if (upgrade) {
                     // Do not wait for complete event, Chrome does not send it for upgrade transaction. Spec does not seem to allow it, but nobody complains.
                     trans.asDynamic().oncomplete = null// Clear listener, because Firefox *does* send complete event
                     transactionJob.complete(true)
-                    console.warn("complete upgrade manually")
                 } else if (result.isSuccess) {
                     if (trans.asDynamic().commit.unsafeCast<Boolean>()) {
-                        console.warn("manual commit")
                         try {
                             reinterpretExceptions {
                                 trans.commit()
@@ -64,11 +58,8 @@ internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transacti
                         } catch (e: Throwable) {
                             result = result.addSuppressed(e)
                         }
-                        console.warn("manual commit post")
-                    } else
-                        console.warn("can't manual commit, no commit")
+                    }
                 } else {
-                    console.warn("manual abort")
                     try {
                         reinterpretExceptions {
                             trans.abort()
@@ -76,13 +67,11 @@ internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transacti
                     } catch (e: Throwable) {
                         result = result.addSuppressed(e)
                     }
-                    console.warn("manual abort post")
                 }
             }
 
             val complete = transactionJob.await()
             if (complete) {
-                console.warn("complete (too soon? $completedTooSoon)")
                 if (completedTooSoon && result.isSuccess) {
                     val e = IllegalStateException("Transaction completed before block, this indicates incorrect use of suspend functions")
                     if (trans.error != null) {
@@ -94,7 +83,6 @@ internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transacti
                     result
                 }
             } else {
-                console.warn("aborted hm")
                 // Aborted
                 if (trans.error == null) {
                     // Aborted manually through abort() above
