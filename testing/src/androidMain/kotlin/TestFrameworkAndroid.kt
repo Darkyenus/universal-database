@@ -13,7 +13,12 @@ actual fun TestContainer.databaseTest(name: String, schema: List<Schema>, test: 
     test(name) {
         val configs = ArrayList<BackendDatabaseConfig>()
         for ((i, s) in schema.withIndex()) {
-            configs.add(BackendDatabaseConfig("TESTDB", *schema.take(i + 1).toTypedArray(), context = testAndroidContext))
+            configs.add(BackendDatabaseConfig(
+                "TESTDB",
+                *schema.take(i + 1).toTypedArray(),
+                context = testAndroidContext,
+                parallelism = 5 // Some tests need this
+                ))
         }
         try {
             test(configs)

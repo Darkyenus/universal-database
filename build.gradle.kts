@@ -38,9 +38,7 @@ kotlin {
         val androidMain by getting {
             dependencies {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
-                implementation("com.github.requery:sqlite-android:3.39.2")
-                implementation("androidx.sqlite:sqlite:2.2.0")// Do not update until Requery does
-                implementation("androidx.core:core:1.9.0")
+                implementation("com.github.Darkyenus:sqlitelite:3.41.0.0")
             }
         }
         val jsMain by getting {
@@ -56,6 +54,6 @@ android {
     namespace = "com.darkyen.database"
     compileSdk = 33
     defaultConfig {
-        minSdk = 16
+        minSdk = 21
     }
 }

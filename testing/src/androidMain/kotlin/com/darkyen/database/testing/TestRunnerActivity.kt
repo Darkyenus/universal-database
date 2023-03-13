@@ -90,7 +90,7 @@ class TestRunnerActivity : Activity() {
                         }
                         TestResultEntry.Status.Success -> {
                             status.setBackgroundColor(0xFF55FF55.toInt())
-                            status.text = "✅"
+                            status.text = "✅ "+entry.durationMs+" ms"
                         }
                         TestResultEntry.Status.Failed -> {
                             status.setBackgroundColor(0xFFFF5555.toInt())

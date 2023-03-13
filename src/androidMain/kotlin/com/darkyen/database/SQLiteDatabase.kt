@@ -2,10 +2,10 @@ package com.darkyen.database
 
 import android.content.Context
 import android.database.sqlite.SQLiteConstraintException
-import io.requery.android.database.sqlite.SQLiteDatabase
-import android.database.sqlite.SQLiteException
-import io.requery.android.database.sqlite.SQLiteOpenHelper
-import io.requery.android.database.sqlite.SQLiteStatement
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteFullException
+import com.darkyen.sqlitelite.SQLiteConnection
+import com.darkyen.sqlitelite.SQLiteStatement
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -15,24 +15,35 @@ import java.io.File
 
 internal class SQLiteUniversalDatabase(
     private val schema: Schema,
-    private val dbHelper: SQLiteOpenHelper
+    primaryConnection: SQLiteConnection,
+    parallelism: Int,
+    openAnotherConnection: () -> SQLiteConnection
     ) : Database {
 
     private var closed = false
-    @OptIn(DelicateCoroutinesApi::class)
-    private val writeDispatcher = newSingleThreadContext(dbHelper.databaseName ?: "DB Executor")
-    private val mutex = ReadWriteMutex()
+    private val connectionPool = LazyResourcePool(primaryConnection, (parallelism - 1).coerceAtLeast(0), openAnotherConnection)
+
+    private suspend inline fun <R> withConnection(crossinline block: suspend (SQLiteConnection) -> R): Result<R> {
+        return runCatching {
+            withContext(Dispatchers.IO) {
+                connectionPool.withResource { connection ->
+                    block(connection)
+                }
+            }
+        }
+    }
 
     override suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
         if (usedTables.any { it !in schema.tables }) throw IllegalArgumentException("Transaction must use tables in schema")
-        return runCatching {
-            withContext(Dispatchers.IO/* there is no transaction, dispatches can run on any thread */) {
-                mutex.read {
-                    val db = dbHelper.readableDatabase
-                    // Readable, no transaction necessary
-                    block(SQLiteTransaction(db, usedTables))
-                }
+        return withConnection { db ->
+            try {
+                db.beginTransactionDeferred()
+                val result = block(SQLiteTransaction(db, usedTables))
+                db.setTransactionSuccessful()
+                result
+            } finally {
+                db.endTransaction()
             }
         }
     }
@@ -40,14 +51,14 @@ internal class SQLiteUniversalDatabase(
     override suspend fun <R> writeTransaction(vararg usedTables: Table<*, *>, block: suspend WriteTransaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
         if (usedTables.any { it !in schema.tables }) throw IllegalArgumentException("Transaction must use tables in schema")
-        return runCatching {
-            withContext(writeDispatcher/* since there is a transaction, the dispatcher must have a stable thread */) {
-                mutex.write {
-                    val db = dbHelper.writableDatabase
-                    db.sqlTransaction {
-                        block(SQLiteTransaction(db, usedTables))
-                    }
-                }
+        return withConnection { db ->
+            try {
+                db.beginTransactionImmediate()
+                val result = block(SQLiteTransaction(db, usedTables))
+                db.setTransactionSuccessful()
+                result
+            } finally {
+                db.endTransaction()
             }
         }.onSuccess {
             // Trigger listeners
@@ -122,12 +133,11 @@ internal class SQLiteUniversalDatabase(
 
     override fun close() {
         closed = true
-        dbHelper.close()
-        writeDispatcher.close()
+        connectionPool.close()
     }
 }
 
-internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tables: Array<out Table<*, *>>) : Transaction, WriteTransaction {
+internal class SQLiteTransaction(private val db: SQLiteConnection, private val tables: Array<out Table<*, *>>) : Transaction, WriteTransaction {
 
     private fun Query<*, *, *>.checkTables() {
         if (table !in tables) throw IllegalArgumentException("Can't query table $table, transaction uses only tables ${tables.contentToString()}")
@@ -140,7 +150,7 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
         val sql = StringBuilder()
         sql.buildSql()
         try {
-            return db.compileStatement(sql.toString()).use(block)
+            return db.statement(sql.toString()).use(block)
         } catch (e: SQLiteConstraintException) {
             throw ConstraintException(e)
         }
@@ -153,7 +163,7 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
             appendWhere(this)
         }) { stat ->
             bindWhereParams(stat)
-            stat.executeUpdateDelete()
+            stat.executeForNothing()
         }
     }
 
@@ -174,12 +184,12 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
             }
             append(")")
         }) { stat ->
-            stat.bindBlob(1, serialize(keySerializer, key))
-            stat.bindBlob(2, serialize(valueSerializer, value))
+            stat.bind(1, serialize(keySerializer, key))
+            stat.bind(2, serialize(valueSerializer, value))
             for ((i, index) in this@add.indices.withIndex()) {
-                stat.bindBlob(3 + i, serializeIndex(key, value, index))
+                stat.bind(3 + i, serializeIndex(key, value, index))
             }
-            stat.executeInsert()
+            stat.executeForNothing()
         }
     }
 
@@ -199,12 +209,12 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
                 append(", ").append(index.fieldName).append(" = ").append("?").append(3 + i)
             }
         }) { stat ->
-            stat.bindBlob(1, serialize(keySerializer, key))
-            stat.bindBlob(2, serialize(valueSerializer, value))
+            stat.bind(1, serialize(keySerializer, key))
+            stat.bind(2, serialize(valueSerializer, value))
             for ((i, index) in this@set.indices.withIndex()) {
-                stat.bindBlob(3 + i, serializeIndex(key, value, index))
+                stat.bind(3 + i, serializeIndex(key, value, index))
             }
-            stat.executeInsert()
+            stat.executeForNothing()
         }
     }
 
@@ -215,72 +225,72 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
             appendWhere(this)
         }) { stat ->
             bindWhereParams(stat)
-            stat.simpleQueryForLong().toInt()
+            stat.executeForLong(0).toInt()
         }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getFirst(): V? {
         checkTables()
-        val sql = buildString {
+        return withStatement({
             append("SELECT $VALUE_COLUMN_NAME FROM ").append(table.name)
             appendWhere(this)
             appendOrder(this)
             append(" LIMIT 1")
-        }
-        return db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
-            if (cursor.moveToFirst()) {
-                deserialize(table.valueSerializer, cursor.getBlob(0))
+        }) { stat ->
+            bindWhereParams(stat)
+            if (stat.cursorNextRow()) {
+                deserialize(table.valueSerializer, stat.cursorGetBlob(0) ?: return@withStatement null)
             } else null
         }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getFirstKey(): K? {
         checkTables()
-        val sql = buildString {
+        return withStatement({
             append("SELECT $KEY_COLUMN_NAME FROM ").append(table.name)
             appendWhere(this)
             appendOrder(this)
             append(" LIMIT 1")
-        }
-        return db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
-            if (cursor.moveToFirst()) {
-                deserialize(table.keySerializer, cursor.getBlob(0))
+        }) { stat ->
+            bindWhereParams(stat)
+            if (stat.cursorNextRow()) {
+                deserialize(table.keySerializer, stat.cursorGetBlob(0)!!)
             } else null
         }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getAll(limit: Int): List<V> {
         checkTables()
-        val sql = buildString {
+        return withStatement({
             append("SELECT $VALUE_COLUMN_NAME FROM ").append(table.name)
             appendWhere(this)
             appendOrder(this)
             appendLimit(this, limit)
-        }
-        return db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
-            if (!cursor.moveToFirst()) return@use emptyList()
+        }) { s ->
+            bindWhereParams(s)
+            if (!s.cursorNextRow()) return@withStatement emptyList()
             val result = ArrayList<V>()
             do {
-                result.add(deserialize(table.valueSerializer, cursor.getBlob(0)))
-            } while (cursor.moveToNext())
+                result.add(deserialize(table.valueSerializer, s.cursorGetBlob(0)!!))
+            } while (s.cursorNextRow())
             result
         }
     }
 
     override suspend fun <K : Any, I : Any, V : Any> Query<K, I, V>.getAllKeys(limit: Int): List<K> {
         checkTables()
-        val sql = buildString {
+        return withStatement({
             append("SELECT $KEY_COLUMN_NAME FROM ").append(table.name)
             appendWhere(this)
             appendOrder(this)
             appendLimit(this, limit)
-        }
-        return db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
-            if (!cursor.moveToFirst()) return@use emptyList()
+        }) { s ->
+            bindWhereParams(s)
+            if (!s.cursorNextRow()) return@withStatement emptyList()
             val result = ArrayList<K>()
             do {
-                result.add(deserialize(table.keySerializer, cursor.getBlob(0)))
-            } while (cursor.moveToNext())
+                result.add(deserialize(table.keySerializer, s.cursorGetBlob(0)!!))
+            } while (s.cursorNextRow())
             result
         }
     }
@@ -288,24 +298,24 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
     override fun <K : Any, I : Any, V : Any> Query<K, I, V>.iterateKeys(): Flow<KeyCursor<K, I>> {
         checkTables()
         return flow {
-            val sql = buildString {
+            withStatement({
                 append("SELECT $KEY_COLUMN_NAME")
                 if (index != null) append(", ").append(index.fieldName)
                 append(" FROM ").append(table.name)
                 appendWhere(this)
                 appendOrder(this)
-            }
-            db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
-                if (!cursor.moveToFirst()) return@use
+            }) { s ->
+                bindWhereParams(s)
+                if (!s.cursorNextRow()) return@withStatement
                 val outCursor = object : KeyCursor<K, I> {
                     override val key: K
-                        get() = deserialize(table.keySerializer, cursor.getBlob(0))
+                        get() = deserialize(table.keySerializer, s.cursorGetBlob(0)!!)
                     override val indexKey: I
-                        get() = if (index != null) deserialize(index.indexSerializer, cursor.getBlob(1)) else throw NoSuchElementException("The cursor has no index")
+                        get() = if (index != null) deserialize(index.indexSerializer, s.cursorGetBlob(1)!!) else throw NoSuchElementException("The cursor has no index")
                 }
                 do {
                     emit(outCursor)
-                } while (cursor.moveToNext())
+                } while (s.cursorNextRow())
             }
         }
     }
@@ -313,26 +323,26 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
     override fun <K : Any, I : Any, V : Any> Query<K, I, V>.iterate(): Flow<Cursor<K, I, V>> {
         checkTables()
         return flow {
-            val sql = buildString {
+            withStatement({
                 append("SELECT $KEY_COLUMN_NAME, $VALUE_COLUMN_NAME")
                 if (index != null) append(", ").append(index.fieldName)
                 append(" FROM ").append(table.name)
                 appendWhere(this)
                 appendOrder(this)
-            }
-            db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
-                if (!cursor.moveToFirst()) return@use
+            }) { s ->
+                bindWhereParams(s)
+                if (!s.cursorNextRow()) return@withStatement
                 val outCursor = object : Cursor<K, I, V> {
                     override val key: K
-                        get() = deserialize(table.keySerializer, cursor.getBlob(0))
+                        get() = deserialize(table.keySerializer, s.cursorGetBlob(0)!!)
                     override val value: V
-                        get() = deserialize(table.valueSerializer, cursor.getBlob(1))
+                        get() = deserialize(table.valueSerializer, s.cursorGetBlob(1)!!)
                     override val indexKey: I
-                        get() = if (index != null) deserialize(index.indexSerializer, cursor.getBlob(1)) else throw NoSuchElementException("The cursor has no index")
+                        get() = if (index != null) deserialize(index.indexSerializer, s.cursorGetBlob(2)!!) else throw NoSuchElementException("The cursor has no index")
                 }
                 do {
                     emit(outCursor)
-                } while (cursor.moveToNext())
+                } while (s.cursorNextRow())
             }
         }
     }
@@ -340,25 +350,25 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
     override fun <K : Any, I : Any, V : Any> Query<K, I, V>.writeIterate(): Flow<MutableCursor<K, I, V>> {
         checkTables()
         return flow {
-            val sql = buildString {
+            withStatement({
                 append("SELECT $KEY_COLUMN_NAME, $VALUE_COLUMN_NAME")
                 if (index != null) append(", ").append(index.fieldName)
                 append(" FROM ").append(table.name)
                 appendWhere(this)
                 appendOrder(this)
-            }
-            db.rawQuery(sql, bindWhereParamsToArray()).use { cursor ->
-                if (!cursor.moveToFirst()) return@use
+            }) { s ->
+                bindWhereParams(s)
+                if (!s.cursorNextRow()) return@withStatement
                 val outCursor = object : MutableCursor<K, I, V> {
                     override val key: K
-                        get() = deserialize(table.keySerializer, cursor.getBlob(0))
+                        get() = deserialize(table.keySerializer, s.cursorGetBlob(0)!!)
                     override val value: V
-                        get() = deserialize(table.valueSerializer, cursor.getBlob(1))
+                        get() = deserialize(table.valueSerializer, s.cursorGetBlob(1)!!)
                     override val indexKey: I
-                        get() = if (index != null) deserialize(index.indexSerializer, cursor.getBlob(1)) else throw NoSuchElementException("The cursor has no index")
+                        get() = if (index != null) deserialize(index.indexSerializer, s.cursorGetBlob(2)!!) else throw NoSuchElementException("The cursor has no index")
 
                     override suspend fun update(newValue: V) {
-                       table.set(key, newValue)
+                        table.set(key, newValue)
                     }
                     override suspend fun delete() {
                         table.queryOne(key).delete()
@@ -366,7 +376,7 @@ internal class SQLiteTransaction(private val db: SQLiteDatabase, private val tab
                 }
                 do {
                     emit(outCursor)
-                } while (cursor.moveToNext())
+                } while (s.cursorNextRow())
             }
         }
     }
@@ -435,20 +445,11 @@ actual class Query<K : Any, I : Any, V : Any> internal constructor(
     fun bindWhereParams(stat: SQLiteStatement) {
         var nextIndex = 1
         if (minBound != null) {
-            stat.bindBlob(nextIndex++, minBound)
+            stat.bind(nextIndex++, minBound)
         }
         if (maxBound != null) {
-            stat.bindBlob(nextIndex, maxBound)
+            stat.bind(nextIndex, maxBound)
         }
-    }
-
-    fun bindWhereParamsToArray(): Array<Any> {
-        val min = minBound
-        val max = maxBound
-        if (min != null && max != null) return arrayOf(min, max)
-        if (min != null) return arrayOf(min)
-        if (max != null) return arrayOf(max)
-        return emptyArray()
     }
 }
 
@@ -470,23 +471,34 @@ actual fun <K: Any, I:Any, V: Any> Index<K, I, V>.query(min: I?, max: I?, openMi
     return Query(this.table, this, serializedMin, openMin, serializedMax, openMax, increasing)
 }
 
+private const val DB_OPEN_FLAGS = SQLiteConnection.SQLITE_OPEN_CREATE or SQLiteConnection.SQLITE_OPEN_READWRITE
+
 actual class BackendDatabaseConfig(
     name: String,
     vararg schema: Schema,
-    val context: Context
+    val context: Context,
+    val parallelism: Int = 2
 ): BaseDatabaseConfig(name, *schema)
 
 actual suspend fun openUniversalDatabase(config: BackendDatabaseConfig): OpenDBResult {
     val schema = config.schema.last()
     val postMigrationCallbacks = ArrayList<() -> Unit>()
-    var newerVersionExists = false
-    val openHelper = object : SQLiteOpenHelper(config.context, config.name, null, schema.version) {
-        override fun onCreate(db: SQLiteDatabase) {
-            onUpgrade(db, 0, schema.version)
+
+    val databaseFile = config.context.getDatabasePath(config.name)
+    val dbPath = databaseFile.absolutePath
+    val db = SQLiteConnection.open(dbPath, DB_OPEN_FLAGS)
+    try {
+        db.pragma("PRAGMA journal_mode=wal")
+        val currentVersion = db.pragma("PRAGMA user_version")?.toIntOrNull() ?: 0
+        val targetVersion: Int = schema.version
+
+        if (currentVersion > targetVersion) {
+            db.close()
+            return OpenDBResult.NewerVersionExists
         }
 
-        private fun createTableAndIndices(db: SQLiteDatabase, table: Table<*, *>) {
-            db.execSQL(buildString {
+        fun createTableAndIndices(table: Table<*, *>) {
+            db.command(buildString {
                 append("CREATE TABLE ").append(table.name).append(" ($KEY_COLUMN_NAME BLOB PRIMARY KEY NOT NULL, $VALUE_COLUMN_NAME BLOB NOT NULL")
                 for (index in table.indices) {
                     append(", ").append(index.fieldName).append(" BLOB NOT NULL")
@@ -494,114 +506,100 @@ actual suspend fun openUniversalDatabase(config: BackendDatabaseConfig): OpenDBR
                 append(")")
             })
             for (index in table.indices) {
-                db.execSQL("CREATE${if (index.unique) " UNIQUE" else ""} INDEX ${index.canonicalName} ON ${table.name} (${index.fieldName})")
+                db.command("CREATE${if (index.unique) " UNIQUE" else ""} INDEX ${index.canonicalName} ON ${table.name} (${index.fieldName})")
             }
         }
 
-        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            val migrateFromIndex = config.schema.indexOfFirst { it.version == oldVersion }
+        if (currentVersion < targetVersion) {
+            db.beginTransactionExclusive()
+            try {
+                val migrateFromIndex = config.schema.indexOfFirst { it.version == currentVersion }
 
-            if (migrateFromIndex < 0) {
-                // Create new version directly
-                if (oldVersion != 0) {
-                    // Delete all tables first
-                    db.rawQuery("SELECT name FROM sqlite_schema WHERE type='table'", null).use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            do {
-                                val tableName = cursor.getString(0)
+                if (migrateFromIndex < 0) {
+                    // Create new version directly
+                    if (currentVersion != 0) {
+                        // Delete all tables first
+                        db.statement("SELECT name FROM sqlite_schema WHERE type='table'").use { s ->
+                            while (s.cursorNextRow()) {
+                                val tableName = s.cursorGetString(0) ?: continue
                                 if (!tableName.startsWith("sqlite_")) {
-                                    db.execSQL("DROP TABLE $tableName")
+                                    db.command("DROP TABLE $tableName")
                                 }
-                            } while (cursor.moveToNext())
+                            }
                         }
                     }
-                }
 
-                for (table in schema.tables) {
-                    createTableAndIndices(db, table)
-                }
-                if (schema.createdNew != null) {
-                    runBlocking {
+                    for (table in schema.tables) {
+                        createTableAndIndices(table)
+                    }
+                    if (schema.createdNew != null) {
                         schema.createdNew.invoke(SQLiteTransaction(db, schema.tables.toTypedArray()))
                     }
-                }
-                if (schema.afterSuccessfulCreationOrMigration != null) {
-                    postMigrationCallbacks.add(schema.afterSuccessfulCreationOrMigration)
-                }
-            } else {
-                for (nextSchemaIndex in migrateFromIndex + 1 until config.schema.size) {
-                    val currentSchema = config.schema[nextSchemaIndex - 1]
-                    val nextSchema = config.schema[nextSchemaIndex]
-
-                    for (table in nextSchema.tables) {
-                        if (table !in currentSchema.tables) {
-                            createTableAndIndices(db, table)
-                        }
+                    if (schema.afterSuccessfulCreationOrMigration != null) {
+                        postMigrationCallbacks.add(schema.afterSuccessfulCreationOrMigration)
                     }
-                    if (nextSchema.migrateFromPrevious != null) {
-                        runBlocking {
+                } else {
+                    for (nextSchemaIndex in migrateFromIndex + 1 until config.schema.size) {
+                        val currentSchema = config.schema[nextSchemaIndex - 1]
+                        val nextSchema = config.schema[nextSchemaIndex]
+
+                        for (table in nextSchema.tables) {
+                            if (table !in currentSchema.tables) {
+                                createTableAndIndices(table)
+                            }
+                        }
+                        if (nextSchema.migrateFromPrevious != null) {
                             nextSchema.migrateFromPrevious.invoke(SQLiteTransaction(db, (currentSchema.tables + nextSchema.tables).toTypedArray()))
                         }
-                    }
-                    if (nextSchema.afterSuccessfulCreationOrMigration != null) {
-                        postMigrationCallbacks.add(nextSchema.afterSuccessfulCreationOrMigration)
-                    }
-                    for (table in currentSchema.tables) {
-                        if (table !in nextSchema.tables) {
-                            db.execSQL("DROP TABLE ${table.name}")
+                        if (nextSchema.afterSuccessfulCreationOrMigration != null) {
+                            postMigrationCallbacks.add(nextSchema.afterSuccessfulCreationOrMigration)
+                        }
+                        for (table in currentSchema.tables) {
+                            if (table !in nextSchema.tables) {
+                                db.command("DROP TABLE ${table.name}")
+                            }
                         }
                     }
                 }
-            }
-        }
+                db.pragma("PRAGMA user_version=$targetVersion")
 
-        override fun onDowngrade(db: SQLiteDatabase?, oldVersion: Int, newVersion: Int) {
-            newerVersionExists = true
-            super.onDowngrade(db, oldVersion, newVersion)
-        }
-
-        var callbackError: Throwable? = null
-        override fun onOpen(db: SQLiteDatabase?) {
-            for (callback in postMigrationCallbacks) {
-                try {
+                for (callback in postMigrationCallbacks) {
                     callback()
-                } catch (t: Throwable) {
-                    val cbE = callbackError
-                    if (cbE == null) {
-                        callbackError = t
-                    } else {
-                        cbE.addSuppressed(t)
-                    }
                 }
+
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
             }
         }
-    }
 
-    try {
-        openHelper.readableDatabase
-    } catch (e:SQLiteException) {
-        if (newerVersionExists) {
-            return OpenDBResult.NewerVersionExists
+    } catch (e: Throwable) {
+        try {
+            db.close()
+        } catch (s: Throwable) {
+            e.addSuppressed(s)
         }
-        if (e.message?.contains("Can't upgrade read-only database") == true) {
+        if (e is SQLiteFullException) {
             return OpenDBResult.OutOfMemory
         }
         return OpenDBResult.Failure(e)
     }
 
-    return OpenDBResult.Success(SQLiteUniversalDatabase(schema, openHelper))
-}
+    return OpenDBResult.Success(SQLiteUniversalDatabase(schema, db, config.parallelism) {
+        val secondary = SQLiteConnection.open(dbPath, DB_OPEN_FLAGS)
 
-/** Performs [block] in an exclusive transaction. Rolls back on any exception. */
-private inline fun <R> SQLiteDatabase.sqlTransaction(block: () -> R): R {
-    beginTransaction()
-    try {
-        val result = block()
-        setTransactionSuccessful()
-        return result
-    } finally {
-        endTransaction()
-    }
+        try {
+            secondary.pragma("PRAGMA journal_mode=wal")
+        } catch (e: Throwable) {
+            try {
+                secondary.close()
+            } catch (s: Throwable) {
+                e.addSuppressed(s)
+            }
+            throw e
+        }
+        secondary
+    })
 }
 
 private const val KEY_COLUMN_NAME = "k"

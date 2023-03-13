@@ -149,7 +149,7 @@ fun TestResult.renderHTMLTable(): String {
                 TestResultEntry.Status.Skipped -> append("background: #555555\">⏩")
                 TestResultEntry.Status.Running -> append("background: #FFFF55\">\uD83C\uDFC3")
                 TestResultEntry.Status.Waiting -> append("\">⏳")
-                TestResultEntry.Status.Success -> append("background: #55FF55\">✅")
+                TestResultEntry.Status.Success -> append("background: #55FF55\">✅ ").append(entry.durationMs).append(" ms")
                 TestResultEntry.Status.Failed -> append("background: #FF5555\">\uD83E\uDD80 ").append(entry.failException?.stackTraceToString())
                 TestResultEntry.Status.TimedOut -> append("background: #FF5555\">\uD83D\uDD70️")
             }
