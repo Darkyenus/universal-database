@@ -4,7 +4,6 @@ import android.content.Context
 import android.database.sqlite.SQLiteConstraintException
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteFullException
-import android.util.LruCache
 import com.darkyen.sqlitelite.SQLiteConnection
 import com.darkyen.sqlitelite.SQLiteStatement
 import kotlinx.coroutines.*
@@ -22,24 +21,9 @@ internal class SQLiteUniversalDatabase(
     ) : Database {
 
     private var closed = false
-    private val connectionPool = LazyResourcePool(ConnectionWithCache(primaryConnection), (parallelism - 1).coerceAtLeast(0)) { ConnectionWithCache(openAnotherConnection()) }
+    private val connectionPool = LazyResourcePool(primaryConnection, (parallelism - 1).coerceAtLeast(0), openAnotherConnection)
 
-    private class ConnectionWithCache(
-        val connection: SQLiteConnection,
-    ) : AutoCloseable by connection, (String) -> SQLiteStatement {
-        private val statementCache = object : LruCache<String, SQLiteStatement>(25) {
-            override fun entryRemoved(evicted: Boolean, key: String, oldValue: SQLiteStatement?, newValue: SQLiteStatement?) {
-                oldValue?.close()
-            }
-            override fun create(key: String): SQLiteStatement = connection.statement(key)
-        }
-
-        override fun invoke(sql: String): SQLiteStatement {
-            return statementCache.get(sql)
-        }
-    }
-
-    private suspend inline fun <R> withConnection(crossinline block: suspend (ConnectionWithCache) -> R): Result<R> {
+    private suspend inline fun <R> withConnection(crossinline block: suspend (SQLiteConnection) -> R): Result<R> {
         return runCatching {
             withContext(Dispatchers.IO) {
                 connectionPool.withResource { connection ->
@@ -52,11 +36,10 @@ internal class SQLiteUniversalDatabase(
     override suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
         if (usedTables.any { it !in schema.tables }) throw IllegalArgumentException("Transaction must use tables in schema")
-        return withConnection { con ->
-            val db = con.connection
+        return withConnection { db ->
             try {
                 db.beginTransactionDeferred()
-                val result = block(SQLiteTransaction(con, usedTables))
+                val result = block(SQLiteTransaction(db, usedTables))
                 db.setTransactionSuccessful()
                 result
             } finally {
@@ -68,11 +51,10 @@ internal class SQLiteUniversalDatabase(
     override suspend fun <R> writeTransaction(vararg usedTables: Table<*, *>, block: suspend WriteTransaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
         if (usedTables.any { it !in schema.tables }) throw IllegalArgumentException("Transaction must use tables in schema")
-        return withConnection { con ->
-            val db = con.connection
+        return withConnection { db ->
             try {
                 db.beginTransactionImmediate()
-                val result = block(SQLiteTransaction(con, usedTables))
+                val result = block(SQLiteTransaction(db, usedTables))
                 db.setTransactionSuccessful()
                 result
             } finally {
@@ -155,9 +137,7 @@ internal class SQLiteUniversalDatabase(
     }
 }
 
-internal class SQLiteTransaction(
-    private val getStatement: (sql: String) -> SQLiteStatement,
-    private val tables: Array<out Table<*, *>>) : Transaction, WriteTransaction {
+internal class SQLiteTransaction(private val db: SQLiteConnection, private val tables: Array<out Table<*, *>>) : Transaction, WriteTransaction {
 
     private fun Query<*, *, *>.checkTables() {
         if (table !in tables) throw IllegalArgumentException("Can't query table $table, transaction uses only tables ${tables.contentToString()}")
@@ -170,12 +150,7 @@ internal class SQLiteTransaction(
         val sql = StringBuilder()
         sql.buildSql()
         try {
-            val statement = getStatement(sql.toString())
-            try {
-                return block(statement)
-            } finally {
-                statement.clearBindings()
-            }
+            return db.statement(sql.toString()).use(block)
         } catch (e: SQLiteConstraintException) {
             throw ConstraintException(e)
         }
@@ -263,13 +238,9 @@ internal class SQLiteTransaction(
             append(" LIMIT 1")
         }) { stat ->
             bindWhereParams(stat)
-            try {
-                if (stat.cursorNextRow()) {
-                    deserialize(table.valueSerializer, stat.cursorGetBlob(0) ?: return@withStatement null)
-                } else null
-            } finally {
-                stat.cursorReset()
-            }
+            if (stat.cursorNextRow()) {
+                deserialize(table.valueSerializer, stat.cursorGetBlob(0) ?: return@withStatement null)
+            } else null
         }
     }
 
@@ -282,13 +253,9 @@ internal class SQLiteTransaction(
             append(" LIMIT 1")
         }) { stat ->
             bindWhereParams(stat)
-            try {
-                if (stat.cursorNextRow()) {
-                    deserialize(table.keySerializer, stat.cursorGetBlob(0)!!)
-                } else null
-            } finally {
-                stat.cursorReset()
-            }
+            if (stat.cursorNextRow()) {
+                deserialize(table.keySerializer, stat.cursorGetBlob(0)!!)
+            } else null
         }
     }
 
@@ -301,16 +268,12 @@ internal class SQLiteTransaction(
             appendLimit(this, limit)
         }) { s ->
             bindWhereParams(s)
-            try {
-                if (!s.cursorNextRow()) return@withStatement emptyList()
-                val result = ArrayList<V>()
-                do {
-                    result.add(deserialize(table.valueSerializer, s.cursorGetBlob(0)!!))
-                } while (s.cursorNextRow())
-                result
-            } finally {
-                s.cursorReset()
-            }
+            if (!s.cursorNextRow()) return@withStatement emptyList()
+            val result = ArrayList<V>()
+            do {
+                result.add(deserialize(table.valueSerializer, s.cursorGetBlob(0)!!))
+            } while (s.cursorNextRow())
+            result
         }
     }
 
@@ -323,16 +286,12 @@ internal class SQLiteTransaction(
             appendLimit(this, limit)
         }) { s ->
             bindWhereParams(s)
-            try {
-                if (!s.cursorNextRow()) return@withStatement emptyList()
-                val result = ArrayList<K>()
-                do {
-                    result.add(deserialize(table.keySerializer, s.cursorGetBlob(0)!!))
-                } while (s.cursorNextRow())
-                result
-            } finally {
-                s.cursorReset()
-            }
+            if (!s.cursorNextRow()) return@withStatement emptyList()
+            val result = ArrayList<K>()
+            do {
+                result.add(deserialize(table.keySerializer, s.cursorGetBlob(0)!!))
+            } while (s.cursorNextRow())
+            result
         }
     }
 
@@ -347,20 +306,16 @@ internal class SQLiteTransaction(
                 appendOrder(this)
             }) { s ->
                 bindWhereParams(s)
-                try {
-                    if (!s.cursorNextRow()) return@withStatement
-                    val outCursor = object : KeyCursor<K, I> {
-                        override val key: K
-                            get() = deserialize(table.keySerializer, s.cursorGetBlob(0)!!)
-                        override val indexKey: I
-                            get() = if (index != null) deserialize(index.indexSerializer, s.cursorGetBlob(1)!!) else throw NoSuchElementException("The cursor has no index")
-                    }
-                    do {
-                        emit(outCursor)
-                    } while (s.cursorNextRow())
-                } finally {
-                    s.cursorReset()
+                if (!s.cursorNextRow()) return@withStatement
+                val outCursor = object : KeyCursor<K, I> {
+                    override val key: K
+                        get() = deserialize(table.keySerializer, s.cursorGetBlob(0)!!)
+                    override val indexKey: I
+                        get() = if (index != null) deserialize(index.indexSerializer, s.cursorGetBlob(1)!!) else throw NoSuchElementException("The cursor has no index")
                 }
+                do {
+                    emit(outCursor)
+                } while (s.cursorNextRow())
             }
         }
     }
@@ -376,22 +331,18 @@ internal class SQLiteTransaction(
                 appendOrder(this)
             }) { s ->
                 bindWhereParams(s)
-                try {
-                    if (!s.cursorNextRow()) return@withStatement
-                    val outCursor = object : Cursor<K, I, V> {
-                        override val key: K
-                            get() = deserialize(table.keySerializer, s.cursorGetBlob(0)!!)
-                        override val value: V
-                            get() = deserialize(table.valueSerializer, s.cursorGetBlob(1)!!)
-                        override val indexKey: I
-                            get() = if (index != null) deserialize(index.indexSerializer, s.cursorGetBlob(2)!!) else throw NoSuchElementException("The cursor has no index")
-                    }
-                    do {
-                        emit(outCursor)
-                    } while (s.cursorNextRow())
-                } finally {
-                    s.cursorReset()
+                if (!s.cursorNextRow()) return@withStatement
+                val outCursor = object : Cursor<K, I, V> {
+                    override val key: K
+                        get() = deserialize(table.keySerializer, s.cursorGetBlob(0)!!)
+                    override val value: V
+                        get() = deserialize(table.valueSerializer, s.cursorGetBlob(1)!!)
+                    override val indexKey: I
+                        get() = if (index != null) deserialize(index.indexSerializer, s.cursorGetBlob(2)!!) else throw NoSuchElementException("The cursor has no index")
                 }
+                do {
+                    emit(outCursor)
+                } while (s.cursorNextRow())
             }
         }
     }
@@ -407,30 +358,25 @@ internal class SQLiteTransaction(
                 appendOrder(this)
             }) { s ->
                 bindWhereParams(s)
-                try {
-                    if (!s.cursorNextRow()) return@withStatement
-                    val outCursor = object : MutableCursor<K, I, V> {
-                        override val key: K
-                            get() = deserialize(table.keySerializer, s.cursorGetBlob(0)!!)
-                        override val value: V
-                            get() = deserialize(table.valueSerializer, s.cursorGetBlob(1)!!)
-                        override val indexKey: I
-                            get() = if (index != null) deserialize(index.indexSerializer, s.cursorGetBlob(2)!!) else throw NoSuchElementException("The cursor has no index")
+                if (!s.cursorNextRow()) return@withStatement
+                val outCursor = object : MutableCursor<K, I, V> {
+                    override val key: K
+                        get() = deserialize(table.keySerializer, s.cursorGetBlob(0)!!)
+                    override val value: V
+                        get() = deserialize(table.valueSerializer, s.cursorGetBlob(1)!!)
+                    override val indexKey: I
+                        get() = if (index != null) deserialize(index.indexSerializer, s.cursorGetBlob(2)!!) else throw NoSuchElementException("The cursor has no index")
 
-                        override suspend fun update(newValue: V) {
-                            table.set(key, newValue)
-                        }
-
-                        override suspend fun delete() {
-                            table.queryOne(key).delete()
-                        }
+                    override suspend fun update(newValue: V) {
+                        table.set(key, newValue)
                     }
-                    do {
-                        emit(outCursor)
-                    } while (s.cursorNextRow())
-                } finally {
-                    s.cursorReset()
+                    override suspend fun delete() {
+                        table.queryOne(key).delete()
+                    }
                 }
+                do {
+                    emit(outCursor)
+                } while (s.cursorNextRow())
             }
         }
     }
@@ -587,7 +533,7 @@ actual suspend fun openUniversalDatabase(config: BackendDatabaseConfig): OpenDBR
                         createTableAndIndices(table)
                     }
                     if (schema.createdNew != null) {
-                        schema.createdNew.invoke(SQLiteTransaction(db::statement, schema.tables.toTypedArray()))
+                        schema.createdNew.invoke(SQLiteTransaction(db, schema.tables.toTypedArray()))
                     }
                     if (schema.afterSuccessfulCreationOrMigration != null) {
                         postMigrationCallbacks.add(schema.afterSuccessfulCreationOrMigration)
@@ -603,7 +549,7 @@ actual suspend fun openUniversalDatabase(config: BackendDatabaseConfig): OpenDBR
                             }
                         }
                         if (nextSchema.migrateFromPrevious != null) {
-                            nextSchema.migrateFromPrevious.invoke(SQLiteTransaction(db::statement, (currentSchema.tables + nextSchema.tables).toTypedArray()))
+                            nextSchema.migrateFromPrevious.invoke(SQLiteTransaction(db, (currentSchema.tables + nextSchema.tables).toTypedArray()))
                         }
                         if (nextSchema.afterSuccessfulCreationOrMigration != null) {
                             postMigrationCallbacks.add(nextSchema.afterSuccessfulCreationOrMigration)
