@@ -15,7 +15,9 @@ repositories {
 }
 
 kotlin {
-    android {}
+    android {
+        publishLibraryVariants("release")
+    }
     js(IR) {
         browser {
         }
