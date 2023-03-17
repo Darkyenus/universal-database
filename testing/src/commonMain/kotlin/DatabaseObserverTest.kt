@@ -3,6 +3,7 @@ package com.darkyen.database
 import com.darkyen.cbor.CborSerializers
 import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
+import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -21,29 +22,29 @@ class DatabaseObserverTest: TestContainer({
             val observe1 = db.observeDatabaseWrites(scope, TableThing1)
             val observe2 = db.observeDatabaseWrites(scope, TableThing2)
 
-            observe12.checkWrite().shouldBeFalse()
-            observe1.checkWrite().shouldBeFalse()
-            observe2.checkWrite().shouldBeFalse()
+            observe12.checkWrite().shouldBe(null)
+            observe1.checkWrite().shouldBe(null)
+            observe2.checkWrite().shouldBe(null)
 
             db.writeTransaction(TableThing1, TableThing2) {}
 
-            observe12.checkWrite().shouldBeTrue()
-            observe1.checkWrite().shouldBeTrue()
-            observe2.checkWrite().shouldBeTrue()
+            observe12.checkWrite().shouldBe(WriteSource.INTERNAL)
+            observe1.checkWrite().shouldBe(WriteSource.INTERNAL)
+            observe2.checkWrite().shouldBe(WriteSource.INTERNAL)
 
-            observe12.checkWrite().shouldBeFalse()
-            observe1.checkWrite().shouldBeFalse()
-            observe2.checkWrite().shouldBeFalse()
+            observe12.checkWrite().shouldBe(null)
+            observe1.checkWrite().shouldBe(null)
+            observe2.checkWrite().shouldBe(null)
 
             db.writeTransaction(TableThing1) {}
 
-            observe12.checkWrite().shouldBeTrue()
-            observe1.checkWrite().shouldBeTrue()
-            observe2.checkWrite().shouldBeFalse()
+            observe12.checkWrite().shouldBe(WriteSource.INTERNAL)
+            observe1.checkWrite().shouldBe(WriteSource.INTERNAL)
+            observe2.checkWrite().shouldBe(null)
 
-            observe12.checkWrite().shouldBeFalse()
-            observe1.checkWrite().shouldBeFalse()
-            observe2.checkWrite().shouldBeFalse()
+            observe12.checkWrite().shouldBe(null)
+            observe1.checkWrite().shouldBe(null)
+            observe2.checkWrite().shouldBe(null)
 
             scope.cancel("Done")
         }
@@ -58,29 +59,29 @@ class DatabaseObserverTest: TestContainer({
                     db.observeDatabaseWrites(TableThing2) {
                         val observe2 = this
 
-                        observe12.checkWrite().shouldBeFalse()
-                        observe1.checkWrite().shouldBeFalse()
-                        observe2.checkWrite().shouldBeFalse()
+                        observe12.checkWrite().shouldBe(null)
+                        observe1.checkWrite().shouldBe(null)
+                        observe2.checkWrite().shouldBe(null)
 
                         db.writeTransaction(TableThing1, TableThing2) {}
 
-                        observe12.checkWrite().shouldBeTrue()
-                        observe1.checkWrite().shouldBeTrue()
-                        observe2.checkWrite().shouldBeTrue()
+                        observe12.checkWrite().shouldBe(WriteSource.INTERNAL)
+                        observe1.checkWrite().shouldBe(WriteSource.INTERNAL)
+                        observe2.checkWrite().shouldBe(WriteSource.INTERNAL)
 
-                        observe12.checkWrite().shouldBeFalse()
-                        observe1.checkWrite().shouldBeFalse()
-                        observe2.checkWrite().shouldBeFalse()
+                        observe12.checkWrite().shouldBe(null)
+                        observe1.checkWrite().shouldBe(null)
+                        observe2.checkWrite().shouldBe(null)
 
                         db.writeTransaction(TableThing1) {}
 
-                        observe12.checkWrite().shouldBeTrue()
-                        observe1.checkWrite().shouldBeTrue()
-                        observe2.checkWrite().shouldBeFalse()
+                        observe12.checkWrite().shouldBe(WriteSource.INTERNAL)
+                        observe1.checkWrite().shouldBe(WriteSource.INTERNAL)
+                        observe2.checkWrite().shouldBe(null)
 
-                        observe12.checkWrite().shouldBeFalse()
-                        observe1.checkWrite().shouldBeFalse()
-                        observe2.checkWrite().shouldBeFalse()
+                        observe12.checkWrite().shouldBe(null)
+                        observe1.checkWrite().shouldBe(null)
+                        observe2.checkWrite().shouldBe(null)
                     }
                 }
             }

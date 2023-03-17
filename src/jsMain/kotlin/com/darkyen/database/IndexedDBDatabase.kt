@@ -7,7 +7,10 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.selects.select
+import org.w3c.dom.BroadcastChannel
 import kotlin.coroutines.*
+import kotlin.random.Random
 
 internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transaction: T, upgrade:Boolean, noinline block: suspend T.() -> R): Result<R> {
     return withContext(Dispatchers.Unconfined) {
@@ -99,6 +102,7 @@ internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transacti
 var DEBUG = false
 
 internal class IndexedDBUniversalDatabase(
+    private val dbName: String,
     private val db: IDBDatabase
 ) : Database {
 
@@ -125,12 +129,14 @@ internal class IndexedDBUniversalDatabase(
                 // Trigger listeners
                 val trigger = ++lastObserverTrigger
                 for (table in usedTables) {
-                    tableObservers[table]?.forEach { observer ->
+                    val (observers, channel) = tableObservers[table] ?: continue
+                    observers.forEach { observer ->
                         if (observer.lastTrigger != trigger) {
                             observer.lastTrigger = trigger
                             observer.trigger()
                         }
                     }
+                    channel?.postMessage(1)
                 }
             }
             result
@@ -144,40 +150,83 @@ internal class IndexedDBUniversalDatabase(
 
     private class WriteObserver : DatabaseWriteObserver {
         var lastTrigger = 0
-        val triggerChannel = Channel<Unit>(1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        val internalTriggerChannel = Channel<Unit>(1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        val externalTriggerChannel = Channel<Unit>(1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
-        override fun checkWrite(): Boolean {
-            return triggerChannel.tryReceive().isSuccess
+        override fun checkWrite(): WriteSource? {
+            val internalWrite = internalTriggerChannel.tryReceive().isSuccess
+            val externalWrite = externalTriggerChannel.tryReceive().isSuccess
+            return when {
+                internalWrite && externalWrite -> WriteSource.INTERNAL_AND_EXTERNAL
+                internalWrite && !externalWrite -> WriteSource.INTERNAL
+                !internalWrite && externalWrite -> WriteSource.EXTERNAL
+                else -> null
+            }
         }
 
-        override suspend fun awaitWrite() {
-            triggerChannel.receive()
+        override suspend fun awaitWrite(): WriteSource {
+            checkWrite()?.let { return it }
+            return select {
+                internalTriggerChannel.onReceive {
+                    WriteSource.INTERNAL
+                }
+                externalTriggerChannel.onReceive {
+                    WriteSource.EXTERNAL
+                }
+            }
         }
 
         fun trigger() {
-            triggerChannel.trySend(Unit)
+            internalTriggerChannel.trySend(Unit)
         }
     }
 
     private var lastObserverTrigger = 0
-    private val tableObservers = HashMap<Table<*, *>, ArrayList<WriteObserver>>()
+    private val tableObservers = HashMap<Table<*, *>, Pair<ArrayList<WriteObserver>, BroadcastChannel?>>()
+
+    private fun addObserver(intoTables: Array<out Table<*, *>>, observer: WriteObserver) {
+        for (table in intoTables) {
+            val list = tableObservers.getOrPut(table) {
+                val observers = ArrayList<WriteObserver>()
+                var channel: BroadcastChannel? = null
+
+                if (BroadcastChannelSupported) {
+                    channel = BroadcastChannel(table.name)
+                    channel.onmessage = {
+                        observers.forEach {
+                            it.externalTriggerChannel.trySend(Unit)
+                        }
+                    }
+                }
+
+                observers to channel
+            }
+            list.first.add(observer)
+        }
+    }
+    private fun removeObserver(intoTables: Array<out Table<*, *>>, observer: WriteObserver) {
+        for (table in intoTables) {
+            val (observers, channel) = tableObservers[table] ?: continue
+            observers.remove(observer)
+            if (observers.isEmpty()) {
+                channel?.onmessage = null
+                channel?.close()
+                tableObservers.remove(table)
+            }
+        }
+    }
 
     override fun observeDatabaseWrites(scope: CoroutineScope, vararg intoTables: Table<*, *>): DatabaseWriteObserver {
         scope.ensureActive()
         val observer = WriteObserver()
         if (closed) return observer
 
-        for (table in intoTables) {
-            val list = tableObservers.getOrPut(table, ::ArrayList)
-            list.add(observer)
-        }
+        addObserver(intoTables, observer)
         scope.launch {
             try {
                 awaitCancellation()
             } finally {
-                for (table in intoTables) {
-                    tableObservers[table]?.remove(observer)
-                }
+                removeObserver(intoTables, observer)
             }
         }
         return observer
@@ -186,19 +235,16 @@ internal class IndexedDBUniversalDatabase(
     override suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: suspend DatabaseWriteObserver.() -> R):R {
         val observer = WriteObserver()
 
-        for (table in intoTables) {
-            val list = tableObservers.getOrPut(table, ::ArrayList)
-            list.add(observer)
-        }
+        addObserver(intoTables, observer)
         try {
             return block(observer)
         } finally {
-            for (table in intoTables) {
-                tableObservers[table]?.remove(observer)
-            }
+            removeObserver(intoTables, observer)
         }
     }
 }
+
+private val BroadcastChannelSupported = window.asDynamic().BroadcastChannel !== undefined
 
 internal suspend fun <T> IDBRequest<T>.result():T {
     return withContext(Dispatchers.Unconfined) {
@@ -592,7 +638,7 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
             val postMigrationCallbacks = ArrayList<() -> Unit>()
             request.onsuccess = {
                 val db = request.result
-                val idb = IndexedDBUniversalDatabase(db)
+                val idb = IndexedDBUniversalDatabase(config.name, db)
                 db.addEventListener("versionchange", {
                     config.onVersionChangeRequest?.invoke(idb)
                 })

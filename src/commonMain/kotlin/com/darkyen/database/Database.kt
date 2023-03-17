@@ -57,15 +57,25 @@ interface Database {
  */
 interface DatabaseWriteObserver {
     /**
-     * Check the write-flag, return its value and set it to false.
+     * Check the write-flag, return its value and reset it.
+     * @return source of the write or null when no write has occurred
      */
-    fun checkWrite(): Boolean
+    fun checkWrite(): WriteSource?
 
     /**
      * Check the write-flag, return if it is true and set it to false.
      * Otherwise, suspend until the write-flag is set to true, then set it to false and return.
      */
-    suspend fun awaitWrite()
+    suspend fun awaitWrite(): WriteSource
+}
+
+enum class WriteSource {
+    /** This process did write */
+    INTERNAL,
+    /** Different process did write */
+    EXTERNAL,
+    /** Since last check, there were writes from both this and external processes */
+    INTERNAL_AND_EXTERNAL
 }
 
 open class BaseDatabaseConfig(

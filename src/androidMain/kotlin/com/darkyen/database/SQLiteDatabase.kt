@@ -78,12 +78,13 @@ internal class SQLiteUniversalDatabase(
         var lastTrigger = 0
         val triggerChannel = Channel<Unit>(1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
-        override fun checkWrite(): Boolean {
-            return triggerChannel.tryReceive().isSuccess
+        override fun checkWrite(): WriteSource? {
+            return if (triggerChannel.tryReceive().isSuccess) WriteSource.INTERNAL else null
         }
 
-        override suspend fun awaitWrite() {
+        override suspend fun awaitWrite(): WriteSource {
             triggerChannel.receive()
+            return WriteSource.INTERNAL
         }
 
         fun trigger() {
