@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.selects.select
 import org.w3c.dom.BroadcastChannel
 import kotlin.coroutines.*
-import kotlin.random.Random
 
 internal suspend inline fun <T:IndexedDBTransaction, R> runTransaction(transaction: T, upgrade:Boolean, noinline block: suspend T.() -> R): Result<R> {
     return withContext(Dispatchers.Unconfined) {
@@ -103,40 +102,36 @@ var DEBUG = false
 
 internal class IndexedDBUniversalDatabase(
     private val dbName: String,
-    private val db: IDBDatabase
+    private val db: IDBDatabase,
+    tables: List<Table<*, *>>
 ) : Database {
 
     internal var closed = false
 
-    override suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R> {
+    override suspend fun <R> transaction(usedTables: TableSet, block: suspend Transaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
         return reinterpretExceptions(if (DEBUG) Exception("transaction started here") else null) {
-            val tables = Array(usedTables.size) { usedTables[it].name }
-            val trans = db.transaction(tables, "readonly")
+            val trans = db.transaction(usedTables.tableNames, "readonly")
             val transaction = IndexedDBTransaction(trans)
             runTransaction(transaction, false, block)
         }
     }
 
-    override suspend fun <R> writeTransaction(vararg usedTables: Table<*, *>, block: suspend WriteTransaction.() -> R): Result<R> {
+    override suspend fun <R> writeTransaction(usedTables: TableSet, block: suspend WriteTransaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
         return reinterpretExceptions(if (DEBUG) Exception("writeTransaction started here") else null) {
-            val tables = Array(usedTables.size) { usedTables[it].name }
-            val trans = db.transaction(tables, "readwrite")
+            val trans = db.transaction(usedTables.tableNames, "readwrite")
             val transaction = IndexedDBWriteTransaction(trans)
             val result = runTransaction(transaction, false, block)
             result.onSuccess {
                 // Trigger listeners
-                val trigger = ++lastObserverTrigger
-                for (table in usedTables) {
-                    val (observers, channel) = tableObservers[table] ?: continue
-                    observers.forEach { observer ->
-                        if (observer.lastTrigger != trigger) {
-                            observer.lastTrigger = trigger
-                            observer.trigger()
-                        }
+                tableObservers.forEachObserver(usedTables) { observer ->
+                    observer.trigger()
+                }
+                if (BroadcastChannelSupported) {
+                    for (tableName in usedTables.tableNames) {
+                        tableChannels[tableName]?.postMessage(1)
                     }
-                    channel?.postMessage(1)
                 }
             }
             result
@@ -144,12 +139,21 @@ internal class IndexedDBUniversalDatabase(
     }
 
     override fun close() {
+        val wasClosed = this.closed
         this.closed = true
-        db.close()
+        try {
+            if (!wasClosed) {
+                for (channel in tableChannels.values) {
+                    channel.onmessage = null
+                    channel.close()
+                }
+            }
+        } finally {
+            db.close()
+        }
     }
 
     private class WriteObserver : DatabaseWriteObserver {
-        var lastTrigger = 0
         val internalTriggerChannel = Channel<Unit>(1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
         val externalTriggerChannel = Channel<Unit>(1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
@@ -181,65 +185,44 @@ internal class IndexedDBUniversalDatabase(
         }
     }
 
-    private var lastObserverTrigger = 0
-    private val tableObservers = HashMap<Table<*, *>, Pair<ArrayList<WriteObserver>, BroadcastChannel?>>()
-
-    private fun addObserver(intoTables: Array<out Table<*, *>>, observer: WriteObserver) {
-        for (table in intoTables) {
-            val list = tableObservers.getOrPut(table) {
-                val observers = ArrayList<WriteObserver>()
-                var channel: BroadcastChannel? = null
-
-                if (BroadcastChannelSupported) {
-                    channel = BroadcastChannel(table.name)
-                    channel.onmessage = {
-                        observers.forEach {
-                            it.externalTriggerChannel.trySend(Unit)
-                        }
-                    }
+    private val tableObservers = TableObservers<WriteObserver>()
+    private val tableChannels: Map<String, BroadcastChannel> = if (BroadcastChannelSupported) {
+        tables.associate { table ->
+            val channel = BroadcastChannel(table.name)
+            val singleTableSet = TableSet(table)
+            channel.onmessage = {
+                tableObservers.forEachObserver(singleTableSet) { observer ->
+                    observer.externalTriggerChannel.trySend(Unit)
                 }
-
-                observers to channel
             }
-            list.first.add(observer)
+            table.name to channel
         }
-    }
-    private fun removeObserver(intoTables: Array<out Table<*, *>>, observer: WriteObserver) {
-        for (table in intoTables) {
-            val (observers, channel) = tableObservers[table] ?: continue
-            observers.remove(observer)
-            if (observers.isEmpty()) {
-                channel?.onmessage = null
-                channel?.close()
-                tableObservers.remove(table)
-            }
-        }
-    }
+    } else emptyMap()
 
-    override fun observeDatabaseWrites(scope: CoroutineScope, vararg intoTables: Table<*, *>): DatabaseWriteObserver {
+    override fun observeDatabaseWrites(scope: CoroutineScope, intoTables: TableSet): DatabaseWriteObserver {
         scope.ensureActive()
         val observer = WriteObserver()
         if (closed) return observer
 
-        addObserver(intoTables, observer)
-        scope.launch {
+        tableObservers.addObserver(intoTables, observer)
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 awaitCancellation()
             } finally {
-                removeObserver(intoTables, observer)
+                tableObservers.removeObserver(observer)
             }
         }
         return observer
     }
 
-    override suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: suspend DatabaseWriteObserver.() -> R):R {
+    override suspend fun <R> observeDatabaseWrites(intoTables: TableSet, block: suspend DatabaseWriteObserver.() -> R):R {
         val observer = WriteObserver()
 
-        addObserver(intoTables, observer)
+        tableObservers.addObserver(intoTables, observer)
         try {
             return block(observer)
         } finally {
-            removeObserver(intoTables, observer)
+            tableObservers.removeObserver(observer)
         }
     }
 }
@@ -638,7 +621,7 @@ internal suspend fun openIndexedDBUD(config: BackendDatabaseConfig): OpenDBResul
             val postMigrationCallbacks = ArrayList<() -> Unit>()
             request.onsuccess = {
                 val db = request.result
-                val idb = IndexedDBUniversalDatabase(config.name, db)
+                val idb = IndexedDBUniversalDatabase(config.name, db, schema.tables)
                 db.addEventListener("versionchange", {
                     config.onVersionChangeRequest?.invoke(idb)
                 })

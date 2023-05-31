@@ -33,9 +33,9 @@ internal class SQLiteUniversalDatabase(
         }
     }
 
-    override suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R> {
+    override suspend fun <R> transaction(usedTables: TableSet, block: suspend Transaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
-        if (usedTables.any { it !in schema.tables }) throw IllegalArgumentException("Transaction must use tables in schema")
+        if (!usedTables.isSubsetOf(schema.tableSet)) throw IllegalArgumentException("Transaction must use tables in schema")
         return withConnection { db ->
             try {
                 db.beginTransactionDeferred()
@@ -48,9 +48,9 @@ internal class SQLiteUniversalDatabase(
         }
     }
 
-    override suspend fun <R> writeTransaction(vararg usedTables: Table<*, *>, block: suspend WriteTransaction.() -> R): Result<R> {
+    override suspend fun <R> writeTransaction(usedTables: TableSet, block: suspend WriteTransaction.() -> R): Result<R> {
         if (closed) return Result.failure(IllegalStateException("Database is closed"))
-        if (usedTables.any { it !in schema.tables }) throw IllegalArgumentException("Transaction must use tables in schema")
+        if (!usedTables.isSubsetOf(schema.tableSet)) throw IllegalArgumentException("Transaction must use tables in schema")
         return withConnection { db ->
             try {
                 db.beginTransactionImmediate()
@@ -62,20 +62,13 @@ internal class SQLiteUniversalDatabase(
             }
         }.onSuccess {
             // Trigger listeners
-            val trigger = ++lastObserverTrigger
-            for (table in usedTables) {
-                tableObservers[table]?.forEach { observer ->
-                    if (observer.lastTrigger != trigger) {
-                        observer.lastTrigger = trigger
-                        observer.trigger()
-                    }
-                }
+            tableObservers.forEachObserver(usedTables) { observer ->
+                observer.trigger()
             }
         }
     }
 
     private class WriteObserver : DatabaseWriteObserver {
-        var lastTrigger = 0
         val triggerChannel = Channel<Unit>(1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
         override fun checkWrite(): WriteSource? {
@@ -92,43 +85,32 @@ internal class SQLiteUniversalDatabase(
         }
     }
 
-    private var lastObserverTrigger = 0
-    private val tableObservers = HashMap<Table<*, *>, ArrayList<WriteObserver>>()
+    private val tableObservers = TableObservers<WriteObserver>()
 
-    override fun observeDatabaseWrites(scope: CoroutineScope, vararg intoTables: Table<*, *>): DatabaseWriteObserver {
+    override fun observeDatabaseWrites(scope: CoroutineScope, intoTables: TableSet): DatabaseWriteObserver {
         scope.ensureActive()
         val observer = WriteObserver()
         if (closed) return observer
 
-        for (table in intoTables) {
-            val list = tableObservers.getOrPut(table, ::ArrayList)
-            list.add(observer)
-        }
-        scope.launch {
+        tableObservers.addObserver(intoTables, observer)
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 awaitCancellation()
             } finally {
-                for (table in intoTables) {
-                    tableObservers[table]?.remove(observer)
-                }
+                tableObservers.removeObserver(observer)
             }
         }
         return observer
     }
 
-    override suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: suspend DatabaseWriteObserver.() -> R):R {
+    override suspend fun <R> observeDatabaseWrites(intoTables: TableSet, block: suspend DatabaseWriteObserver.() -> R):R {
         val observer = WriteObserver()
 
-        for (table in intoTables) {
-            val list = tableObservers.getOrPut(table, ::ArrayList)
-            list.add(observer)
-        }
+        tableObservers.addObserver(intoTables, observer)
         try {
             return block(observer)
         } finally {
-            for (table in intoTables) {
-                tableObservers[table]?.remove(observer)
-            }
+            tableObservers.removeObserver(observer)
         }
     }
 
@@ -138,13 +120,13 @@ internal class SQLiteUniversalDatabase(
     }
 }
 
-internal class SQLiteTransaction(private val db: SQLiteConnection, private val tables: Array<out Table<*, *>>) : Transaction, WriteTransaction {
+internal class SQLiteTransaction(private val db: SQLiteConnection, private val tables: TableSet) : Transaction, WriteTransaction {
 
     private fun Query<*, *, *>.checkTables() {
-        if (table !in tables) throw IllegalArgumentException("Can't query table $table, transaction uses only tables ${tables.contentToString()}")
+        if (table !in tables) throw IllegalArgumentException("Can't query table $table, transaction does not use this table")
     }
     private fun Table<*, *>.checkTables() {
-        if (this !in tables) throw IllegalArgumentException("Can't query table $this, transaction uses only tables ${tables.contentToString()}")
+        if (this !in tables) throw IllegalArgumentException("Can't query table $this, transaction does not use this table")
     }
 
     private inline fun <R> withStatement(buildSql: StringBuilder.() -> Unit, block: (SQLiteStatement) -> R): R {
@@ -534,7 +516,7 @@ actual suspend fun openUniversalDatabase(config: BackendDatabaseConfig): OpenDBR
                         createTableAndIndices(table)
                     }
                     if (schema.createdNew != null) {
-                        schema.createdNew.invoke(SQLiteTransaction(db, schema.tables.toTypedArray()))
+                        schema.createdNew.invoke(SQLiteTransaction(db, TableSet(schema.tables)))
                     }
                     if (schema.afterSuccessfulCreationOrMigration != null) {
                         postMigrationCallbacks.add(schema.afterSuccessfulCreationOrMigration)
@@ -550,7 +532,7 @@ actual suspend fun openUniversalDatabase(config: BackendDatabaseConfig): OpenDBR
                             }
                         }
                         if (nextSchema.migrateFromPrevious != null) {
-                            nextSchema.migrateFromPrevious.invoke(SQLiteTransaction(db, (currentSchema.tables + nextSchema.tables).toTypedArray()))
+                            nextSchema.migrateFromPrevious.invoke(SQLiteTransaction(db, TableSet(currentSchema.tables + nextSchema.tables)))
                         }
                         if (nextSchema.afterSuccessfulCreationOrMigration != null) {
                             postMigrationCallbacks.add(nextSchema.afterSuccessfulCreationOrMigration)

@@ -3,6 +3,9 @@ package com.darkyen.database
 import com.darkyen.cbor.CborSerializer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlin.jvm.JvmInline
+import kotlin.math.max
+import kotlin.math.min
 
 interface Database {
     /**
@@ -12,7 +15,12 @@ interface Database {
      * Try to keep the duration of the transactions short.
      * Some backends may not allow to perform any other suspending functions than those related to the [Transaction].
      */
-    suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R>
+    suspend fun <R> transaction(usedTables: TableSet, block: suspend Transaction.() -> R): Result<R>
+
+    @Deprecated("Precompute the table set", ReplaceWith("transaction(TableSet(usedTables), block)"))
+    suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R> {
+        return transaction(TableSet(*usedTables), block)
+    }
 
     /**
      * Perform a write-transaction, which is allowed to read and write only [usedTables].
@@ -25,7 +33,12 @@ interface Database {
      * @return result from [block] or an exception (this should not throw anything)
      * @throws IllegalStateException when the database is closed
      */
-    suspend fun <R> writeTransaction(vararg usedTables: Table<*, *>, block: suspend WriteTransaction.() -> R): Result<R>
+    suspend fun <R> writeTransaction(usedTables: TableSet, block: suspend WriteTransaction.() -> R): Result<R>
+
+    @Deprecated("Precompute the table set", ReplaceWith("writeTransaction(TableSet(usedTables), block)"))
+    suspend fun <R> writeTransaction(vararg usedTables: Table<*, *>, block: suspend WriteTransaction.() -> R): Result<R> {
+        return writeTransaction(TableSet(*usedTables), block)
+    }
 
     /**
      * Create a [DatabaseWriteObserver] that will be triggered after each successful [writeTransaction]
@@ -33,12 +46,22 @@ interface Database {
      * You can create as many observers on the same table as you want.
      * @param scope when this scope closes, the observer will unregister itself and close other held resources. The scope must be active at the time of this call.
      */
-    fun observeDatabaseWrites(scope: CoroutineScope, vararg intoTables: Table<*, *>): DatabaseWriteObserver
+    fun observeDatabaseWrites(scope: CoroutineScope, intoTables: TableSet): DatabaseWriteObserver
+
+    @Deprecated("Precompute the table set", ReplaceWith("observeDatabaseWrites(scope, TableSet(intoTables))"))
+    fun observeDatabaseWrites(scope: CoroutineScope, vararg intoTables: Table<*, *>): DatabaseWriteObserver {
+        return observeDatabaseWrites(scope, TableSet(*intoTables))
+    }
 
     /**
      * Variant without [CoroutineScope] argument for short running actions. The [DatabaseWriteObserver] is valid and registered only until [block] does not end.
      */
-    suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: suspend DatabaseWriteObserver.() -> R):R
+    suspend fun <R> observeDatabaseWrites(intoTables: TableSet, block: suspend DatabaseWriteObserver.() -> R):R
+
+    @Deprecated("Precompute the table set", ReplaceWith("observeDatabaseWrites(TableSet(intoTables), block)"))
+    suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: suspend DatabaseWriteObserver.() -> R):R {
+        return observeDatabaseWrites(TableSet(*intoTables), block)
+    }
 
     /**
      * Close the database.
@@ -142,18 +165,23 @@ interface WriteTransaction : Transaction {
     fun <K:Any, I:Any, V:Any> Query<K, I, V>.writeIterate(): Flow<MutableCursor<K, I, V>>
 }
 
+private var nextTableIndex = 0
+
 /**
  * Describes a table that holds data.
  * Values in a table are serialized using [valueSerializer].
  * Keys are ordered, based on their binary representation and are serialized using [keySerializer].
  * Key-value pairs can be also looked up through [indices] which extract some value from the key-value through which the lookup is done.
  */
-class Table<Key:Any, Value:Any>(
+class Table<Key:Any, Value:Any> constructor(
     val name: String,
     internal val keySerializer: KeySerializer<Key>,
     internal val valueSerializer: CborSerializer<Value>,
     internal val indices: List<Index<Key, *, Value>> = emptyList()
 ) {
+
+    internal val index = nextTableIndex++
+
     init {
         validateName(name)
         for ((i, index) in indices.withIndex()) {
@@ -205,7 +233,9 @@ class Schema(
     internal val createdNew: (suspend WriteTransaction.() -> Unit)? = null,
     /** Called when database opening during which [migrateFromPrevious] or [createdNew] of this schema was called */
     internal val afterSuccessfulCreationOrMigration: (() -> Unit)? = null
-)
+) {
+    internal val tableSet = TableSet(tables)
+}
 
 /** Describes a set of objects in a database. */
 expect class Query<Key:Any, Index:Any, Value: Any>

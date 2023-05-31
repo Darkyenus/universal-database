@@ -3,6 +3,7 @@
 
 Supported platforms:
 - JavaScript through IndexedDB
+- Android through [com.github.Darkyenus:sqlitelite](https://github.com/Darkyenus/sqlitelite)
 
 ### Running tests
 
