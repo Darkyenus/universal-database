@@ -71,6 +71,23 @@ interface Database {
     fun close()
 }
 
+//region Single table helpers
+suspend inline fun <R> Database.transaction(usedTable: Table<*, *>, noinline block: suspend Transaction.() -> R): Result<R> {
+    return transaction(usedTable.selfSet, block)
+}
+suspend inline fun <R> Database.writeTransaction(usedTable: Table<*, *>, noinline block: suspend WriteTransaction.() -> R): Result<R> {
+    return writeTransaction(usedTable.selfSet, block)
+}
+@Suppress("NOTHING_TO_INLINE")
+inline fun Database.observeDatabaseWrites(scope: CoroutineScope, intoTable: Table<*, *>): DatabaseWriteObserver {
+    return observeDatabaseWrites(scope, intoTable.selfSet)
+}
+suspend inline fun <R> Database.observeDatabaseWrites(intoTable: Table<*, *>, noinline block: suspend DatabaseWriteObserver.() -> R):R {
+    return observeDatabaseWrites(intoTable.selfSet, block)
+}
+//endregion
+
+
 /**
  * Contains a single boolean flag that indicates
  * whether the database has been modified since the last check.
@@ -180,8 +197,6 @@ class Table<Key:Any, Value:Any> constructor(
     internal val indices: List<Index<Key, *, Value>> = emptyList()
 ) {
 
-    internal val index = nextTableIndex++
-
     init {
         validateName(name)
         for ((i, index) in indices.withIndex()) {
@@ -191,6 +206,9 @@ class Table<Key:Any, Value:Any> constructor(
             index.fieldName = "i$i"
         }
     }
+
+    internal val index = nextTableIndex++
+    @PublishedApi internal val selfSet = TableSet(this)
 
     override fun toString(): String {
         return "Table $name"
