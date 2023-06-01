@@ -17,11 +17,6 @@ interface Database {
      */
     suspend fun <R> transaction(usedTables: TableSet, block: suspend Transaction.() -> R): Result<R>
 
-    @Deprecated("Precompute the table set", ReplaceWith("transaction(TableSet(usedTables), block)"))
-    suspend fun <R> transaction(vararg usedTables: Table<*, *>, block: suspend Transaction.() -> R): Result<R> {
-        return transaction(TableSet(*usedTables), block)
-    }
-
     /**
      * Perform a write-transaction, which is allowed to read and write only [usedTables].
      * Only one write transaction can run on the same table at the same time
@@ -35,11 +30,6 @@ interface Database {
      */
     suspend fun <R> writeTransaction(usedTables: TableSet, block: suspend WriteTransaction.() -> R): Result<R>
 
-    @Deprecated("Precompute the table set", ReplaceWith("writeTransaction(TableSet(usedTables), block)"))
-    suspend fun <R> writeTransaction(vararg usedTables: Table<*, *>, block: suspend WriteTransaction.() -> R): Result<R> {
-        return writeTransaction(TableSet(*usedTables), block)
-    }
-
     /**
      * Create a [DatabaseWriteObserver] that will be triggered after each successful [writeTransaction]
      * into any of the tables in [intoTables].
@@ -48,20 +38,10 @@ interface Database {
      */
     fun observeDatabaseWrites(scope: CoroutineScope, intoTables: TableSet): DatabaseWriteObserver
 
-    @Deprecated("Precompute the table set", ReplaceWith("observeDatabaseWrites(scope, TableSet(intoTables))"))
-    fun observeDatabaseWrites(scope: CoroutineScope, vararg intoTables: Table<*, *>): DatabaseWriteObserver {
-        return observeDatabaseWrites(scope, TableSet(*intoTables))
-    }
-
     /**
      * Variant without [CoroutineScope] argument for short running actions. The [DatabaseWriteObserver] is valid and registered only until [block] does not end.
      */
     suspend fun <R> observeDatabaseWrites(intoTables: TableSet, block: suspend DatabaseWriteObserver.() -> R):R
-
-    @Deprecated("Precompute the table set", ReplaceWith("observeDatabaseWrites(TableSet(intoTables), block)"))
-    suspend fun <R> observeDatabaseWrites(vararg intoTables: Table<*, *>, block: suspend DatabaseWriteObserver.() -> R):R {
-        return observeDatabaseWrites(TableSet(*intoTables), block)
-    }
 
     /**
      * Close the database.

@@ -77,13 +77,13 @@ class DatabaseTest : TestContainer({
             }
 
             withClue("insert") {
-                db.writeTransaction(birdTable, sightingTable) {
+                db.writeTransaction(TableSet(birdTable, sightingTable)) {
                     birdTable.add(BIRD_ID, bird)
                     sightingTable.add(SIGHTING_ID, sighting)
                 }.shouldBeSuccess()
             }
             withClue("update") {
-                db.writeTransaction(birdTable, sightingTable) {
+                db.writeTransaction(TableSet(birdTable, sightingTable)) {
                     birdTable.set(BIRD_ID, bird)
                     sightingTable.set(SIGHTING_ID, sighting)
                 }.shouldBeSuccess()
@@ -177,7 +177,7 @@ class DatabaseTest : TestContainer({
     databaseTest("all", schema) { config ->
         withDatabase(config) { db ->
             withClue("insert all") {
-                db.writeTransaction(birdTable, sightingTable) {
+                db.writeTransaction(TableSet(birdTable, sightingTable)) {
                     for ((i, bird) in birds.withIndex()) {
                         withClue({ "$i: $bird" }) {
                             birdTable.add(i.toLong(), bird)

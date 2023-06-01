@@ -1,8 +1,6 @@
 package com.darkyen.database
 
 import com.darkyen.cbor.CborSerializers
-import io.kotest.matchers.booleans.shouldBeFalse
-import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -18,7 +16,7 @@ class DatabaseObserverTest: TestContainer({
         withDatabase(config) { db ->
             val scope = CoroutineScope(Job())
 
-            val observe12 = db.observeDatabaseWrites(scope, TableThing1, TableThing2)
+            val observe12 = db.observeDatabaseWrites(scope, TableSet(TableThing1, TableThing2))
             val observe1 = db.observeDatabaseWrites(scope, TableThing1)
             val observe2 = db.observeDatabaseWrites(scope, TableThing2)
 
@@ -26,7 +24,7 @@ class DatabaseObserverTest: TestContainer({
             observe1.checkWrite().shouldBe(null)
             observe2.checkWrite().shouldBe(null)
 
-            db.writeTransaction(TableThing1, TableThing2) {}
+            db.writeTransaction(TableSet(TableThing1, TableThing2)) {}
 
             observe12.checkWrite().shouldBe(WriteSource.INTERNAL)
             observe1.checkWrite().shouldBe(WriteSource.INTERNAL)
@@ -52,7 +50,7 @@ class DatabaseObserverTest: TestContainer({
 
     databaseTest("nested observer", schema) { config ->
         withDatabase(config) { db ->
-            db.observeDatabaseWrites(TableThing1, TableThing2) {
+            db.observeDatabaseWrites(TableSet(TableThing1, TableThing2)) {
                 val observe12 = this
                 db.observeDatabaseWrites(TableThing1) {
                     val observe1 = this
@@ -63,7 +61,7 @@ class DatabaseObserverTest: TestContainer({
                         observe1.checkWrite().shouldBe(null)
                         observe2.checkWrite().shouldBe(null)
 
-                        db.writeTransaction(TableThing1, TableThing2) {}
+                        db.writeTransaction(TableSet(TableThing1, TableThing2)) {}
 
                         observe12.checkWrite().shouldBe(WriteSource.INTERNAL)
                         observe1.checkWrite().shouldBe(WriteSource.INTERNAL)
