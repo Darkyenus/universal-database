@@ -58,4 +58,8 @@ actual class TableSet private constructor(
         val bit = table.index and 0x1F
         return (bits[word] and (1 shl bit)) != 0
     }
+
+    override fun toString(): String {
+        return tableNames.joinToString(prefix="TableSet(", postfix = ")")
+    }
 }

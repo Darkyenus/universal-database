@@ -45,9 +45,6 @@ actual class TableSet private constructor(internal val words: IntArray) {
             }
             return@run true
         }
-        println("  SUBSET: $this")
-        println("SUPERSET: $superset")
-        println(result)
         return result
     }
 
