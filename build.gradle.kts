@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.darkyen"
-version = "1.4"
+version = "1.5"
 
 repositories {
     mavenCentral()
@@ -31,15 +31,15 @@ kotlin {
         val commonMain by getting {
             dependencies {
                 // Coroutines
-                api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
+                api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
 
                 // CBOR
-                api("com.darkyen.lkmp-cbor:lkmp-cbor:1.0")
+                api("com.darkyen.lkmp-cbor:lkmp-cbor:1.1")
             }
         }
         val androidMain by getting {
             dependencies {
-                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
                 implementation("com.github.Darkyenus:sqlitelite:3.41.0.0")
             }
         }
