@@ -125,8 +125,11 @@ internal class IndexedDBUniversalDatabase(
             val result = runTransaction(transaction, false, block)
             result.onSuccess {
                 // Trigger listeners
-                tableObservers.forEachObserver(usedTables) { observer ->
+                if (tableObservers.forEachObserver(usedTables) { observer ->
                     observer.trigger()
+                } > 0) {
+                    // Yield to allow the observers to start processing before the transaction ends
+                    yield()
                 }
                 if (BroadcastChannelSupported) {
                     for (tableName in usedTables.tableNames) {

@@ -62,8 +62,11 @@ internal class SQLiteUniversalDatabase(
             }
         }.onSuccess {
             // Trigger listeners
-            tableObservers.forEachObserver(usedTables) { observer ->
+            if (tableObservers.forEachObserver(usedTables) { observer ->
                 observer.trigger()
+            } > 0) {
+                // Yield to allow the observers to start processing before the transaction ends
+                yield()
             }
         }
     }

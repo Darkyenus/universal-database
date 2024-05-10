@@ -80,8 +80,12 @@ class TableObservers<V> {
         }
     }
 
-    fun forEachObserver(tables: TableSet, handleObserver: (V) -> Unit) {
+    /**
+     * @return the amount of observers invoked
+     */
+    fun forEachObserver(tables: TableSet, handleObserver: (V) -> Unit): Int {
         val observers = internalObtainObservers(tables)
+        var observerCount = 0
 
         var error: Throwable? = null
         var i = 0
@@ -91,6 +95,7 @@ class TableObservers<V> {
             i++
 
             try {
+                observerCount++
                 @Suppress("UNCHECKED_CAST")
                 handleObserver(observer as V)
             } catch (e: Throwable) {
@@ -106,5 +111,6 @@ class TableObservers<V> {
         if (error != null) {
             throw error
         }
+        return observerCount
     }
 }
