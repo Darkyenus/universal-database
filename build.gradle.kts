@@ -1,5 +1,5 @@
 plugins {
-    kotlin("multiplatform") version "1.7.22"
+    kotlin("multiplatform") version "1.8.22"
     id("com.android.library") version "7.3.0"
     id("io.kotest.multiplatform") version "5.5.5"
     `maven-publish`
